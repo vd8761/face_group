@@ -325,16 +325,96 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
             </motion.div>
           )}
 
-          {/* How-to guide */}
-          <details style={{ fontSize: '0.82rem', color: 'var(--color-muted)', cursor: 'pointer' }}>
-            <summary style={{ fontWeight: 500 }}>How to get a shareable Google Drive link?</summary>
-            <ol style={{ marginTop: '0.5rem', paddingLeft: '1.25rem', lineHeight: 1.8 }}>
-              <li>Open <strong>Google Drive</strong> and find your photos folder</li>
-              <li>Right-click the folder → <strong>"Share"</strong></li>
-              <li>Under "General access", choose <strong>"Anyone with the link"</strong> → <strong>Viewer</strong></li>
-              <li>Click <strong>"Copy link"</strong> and paste it above</li>
-            </ol>
-          </details>
+          {/* ── How-to guide — always visible ── */}
+          <div style={{
+            borderRadius: 'var(--radius-lg)',
+            border: '1px solid var(--color-border)',
+            overflow: 'hidden',
+          }}>
+            {/* Header */}
+            <div style={{
+              background: 'linear-gradient(90deg, rgba(66,133,244,0.12), rgba(52,168,83,0.08))',
+              padding: '0.65rem 1rem',
+              borderBottom: '1px solid var(--color-border)',
+              display: 'flex', alignItems: 'center', gap: '0.5rem',
+            }}>
+              <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--color-text)', letterSpacing: '0.02em' }}>
+                📋 HOW TO SHARE A GOOGLE DRIVE FOLDER
+              </span>
+            </div>
+
+            {/* Steps */}
+            <div style={{ display: 'flex', flexDirection: 'column', background: 'var(--color-surface-2)' }}>
+              {[
+                {
+                  num: '1',
+                  text: <>Open <strong>Google Drive</strong> and navigate to your photos folder</>,
+                  sub: null,
+                  warn: false,
+                },
+                {
+                  num: '2',
+                  text: <>Right-click the folder and click <strong style={{ color: 'var(--accent)' }}>"Share"</strong></>,
+                  sub: null,
+                  warn: false,
+                },
+                {
+                  num: '3',
+                  text: <>Under <em>"General access"</em>, click the dropdown and choose <strong style={{ color: '#ea4335' }}>"Anyone with the link"</strong></>,
+                  sub: (
+                    <div style={{
+                      marginTop: '0.4rem',
+                      background: 'rgba(234,67,53,0.08)',
+                      border: '1px solid rgba(234,67,53,0.25)',
+                      borderRadius: '6px',
+                      padding: '0.4rem 0.65rem',
+                      fontSize: '0.78rem',
+                      color: '#ea4335',
+                      display: 'flex', alignItems: 'center', gap: '0.4rem',
+                    }}>
+                      ⚠️ <span>This step is <strong>required</strong> — private folders cannot be imported</span>
+                    </div>
+                  ),
+                  warn: true,
+                },
+                {
+                  num: '4',
+                  text: <>Make sure the role is set to <strong style={{ color: 'var(--success)' }}>"Viewer"</strong> (not Editor)</>,
+                  sub: null,
+                  warn: false,
+                },
+                {
+                  num: '5',
+                  text: <>Click <strong style={{ color: 'var(--accent)' }}>"Copy link"</strong> and paste it in the field above</>,
+                  sub: null,
+                  warn: false,
+                },
+              ].map((step, i, arr) => (
+                <div key={i} style={{
+                  display: 'flex', gap: '0.75rem',
+                  padding: '0.75rem 1rem',
+                  borderBottom: i < arr.length - 1 ? '1px solid var(--color-border)' : 'none',
+                  background: step.warn ? 'rgba(234,67,53,0.03)' : 'transparent',
+                }}>
+                  {/* Step number bubble */}
+                  <div style={{
+                    width: 22, height: 22, borderRadius: '50%',
+                    background: step.warn ? '#ea4335' : 'var(--accent)',
+                    color: '#fff',
+                    fontSize: '0.7rem', fontWeight: 700,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    flexShrink: 0, marginTop: 1,
+                  }}>{step.num}</div>
+
+                  {/* Step text */}
+                  <div style={{ flex: 1, fontSize: '0.84rem', color: 'var(--color-text)', lineHeight: 1.55 }}>
+                    {step.text}
+                    {step.sub}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </motion.div>
       )}
 
