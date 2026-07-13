@@ -217,6 +217,18 @@ export default function EventManager() {
                 <button 
                   className="btn btn-outline btn-sm" 
                   onClick={async () => {
+                    if (window.confirm("Are you sure you want to delete ALL photos for this event? This action cannot be undone.")) {
+                      await api.delete(`/api/photos/events/${eventId}/clear?status_filter=all`);
+                      loadPhotos(); loadClusters(); loadEvent();
+                    }
+                  }}
+                >
+                  <AlertTriangle size={13} style={{ color: 'var(--error)' }} />
+                  Clear All Photos
+                </button>
+                <button 
+                  className="btn btn-outline btn-sm" 
+                  onClick={async () => {
                     if (window.confirm("Delete all queued and failed photos?")) {
                       await api.delete(`/api/photos/events/${eventId}/clear?status_filter=queued`);
                       await api.delete(`/api/photos/events/${eventId}/clear?status_filter=failed`);
