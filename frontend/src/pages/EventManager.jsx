@@ -3,7 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
   ArrowLeft, Upload, Users, Image, RefreshCw, Merge, Loader2,
-  CheckCircle2, AlertCircle, Clock, AlertTriangle, Key, Share2
+  CheckCircle2, AlertCircle, Clock, AlertTriangle, Key, Share2, X
 } from 'lucide-react';
 import api from '../api/client';
 import PhotoUpload from '../components/PhotoUpload';
@@ -29,6 +29,12 @@ export default function EventManager() {
   const [reClustering, setReClustering] = useState(false);
   const [merging, setMerging] = useState(false);
   const [mergeIds, setMergeIds] = useState([]);
+  const [isMergeMode, setIsMergeMode] = useState(false);
+  
+  // Cluster Detail Modal State
+  const [selectedCluster, setSelectedCluster] = useState(null);
+  const [clusterPhotos, setClusterPhotos] = useState([]);
+  const [loadingClusterPhotos, setLoadingClusterPhotos] = useState(false);
 
   const loadEvent = useCallback(async () => {
     try {
@@ -88,6 +94,28 @@ export default function EventManager() {
 
   const toggleMergeSelect = (id) => {
     setMergeIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : prev.length < 2 ? [...prev, id] : [prev[1], id]);
+  };
+  
+  const handleClusterClick = (cluster) => {
+    if (isMergeMode) {
+      toggleMergeSelect(cluster.id);
+    } else {
+      setSelectedCluster(cluster);
+      loadClusterPhotos(cluster.id);
+    }
+  };
+
+  const loadClusterPhotos = async (clusterId) => {
+    setLoadingClusterPhotos(true);
+    setClusterPhotos([]);
+    try {
+      const { data } = await api.get(`/api/faces/events/${eventId}/clusters/${clusterId}/photos`);
+      setClusterPhotos(data);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingClusterPhotos(false);
+    }
   };
 
   const copyCode = () => {
@@ -227,8 +255,15 @@ export default function EventManager() {
             <div className="flex justify-between items-center mb-4" style={{ flexWrap: 'wrap', gap: '0.75rem' }}>
               <span className="text-sm text-muted">{clusters.length} face groups detected</span>
               <div className="flex gap-2">
-                {mergeIds.length === 2 && (
-                  <button className="btn btn-secondary btn-sm" onClick={mergeClusters} disabled={merging}>
+                <button 
+                  className={`btn btn-sm ${isMergeMode ? 'btn-secondary' : 'btn-ghost'}`} 
+                  onClick={() => setIsMergeMode(!isMergeMode)}
+                >
+                  <Merge size={13} />
+                  {isMergeMode ? 'Cancel Merge' : 'Merge Mode'}
+                </button>
+                {isMergeMode && mergeIds.length === 2 && (
+                  <button className="btn btn-primary btn-sm" onClick={mergeClusters} disabled={merging}>
                     {merging ? <Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} /> : <Merge size={13} />}
                     Merge Selected
                   </button>
@@ -259,9 +294,14 @@ export default function EventManager() {
                 {clusters.map((cluster) => (
                   <div
                     key={cluster.id}
-                    className="cluster-card"
-                    style={{ cursor: 'pointer', outline: mergeIds.includes(cluster.id) ? '2px solid var(--accent-light)' : 'none', outlineOffset: '2px' }}
-                    onClick={() => toggleMergeSelect(cluster.id)}
+                    className={`cluster-card ${isMergeMode ? 'merge-mode' : ''}`}
+                    style={{ 
+                      cursor: 'pointer', 
+                      outline: mergeIds.includes(cluster.id) ? '2px solid var(--accent-light)' : 'none', 
+                      outlineOffset: '2px',
+                      opacity: (isMergeMode && mergeIds.length === 2 && !mergeIds.includes(cluster.id)) ? 0.5 : 1
+                    }}
+                    onClick={() => handleClusterClick(cluster)}
                   >
                     {cluster.sample_thumbnails.length > 0 ? (
                       <div className="cluster-faces">
@@ -290,6 +330,74 @@ export default function EventManager() {
           </motion.div>
         )}
       </div>
+
+      {/* Cluster Detail Modal */}
+      {selectedCluster && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.8)',
+          zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          padding: '1rem'
+        }}>
+          <div style={{
+            background: 'var(--color-surface)',
+            width: '100%', maxWidth: '800px',
+            maxHeight: '90vh', borderRadius: 'var(--radius-lg)',
+            display: 'flex', flexDirection: 'column', overflow: 'hidden',
+            boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)'
+          }}>
+            {/* Modal Header */}
+            <div style={{ padding: '1.25rem', borderBottom: '1px solid var(--color-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div className="flex items-center gap-3">
+                <div style={{ width: 40, height: 40, borderRadius: '50%', overflow: 'hidden' }}>
+                  <img src={selectedCluster.sample_thumbnails[0]} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '1.1rem' }}>{selectedCluster.label || `Person ${selectedCluster.id.slice(0, 6)}`}</h3>
+                  <div className="text-xs text-muted">{selectedCluster.member_count} photos</div>
+                </div>
+              </div>
+              <button className="btn btn-ghost btn-sm" onClick={() => setSelectedCluster(null)}>
+                <X size={20} />
+              </button>
+            </div>
+            
+            {/* Modal Body */}
+            <div style={{ padding: '1.25rem', overflowY: 'auto', flex: 1 }}>
+              {loadingClusterPhotos ? (
+                <div className="flex justify-center items-center py-8">
+                  <Loader2 size={24} color="var(--accent-light)" style={{ animation: 'spin 1s linear infinite' }} />
+                </div>
+              ) : (
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
+                  gap: '1rem'
+                }}>
+                  {clusterPhotos.map(photo => (
+                    <div key={photo.id} style={{
+                      aspectRatio: '1', borderRadius: 'var(--radius-md)', overflow: 'hidden',
+                      border: '1px solid var(--color-border)', backgroundColor: 'var(--color-surface-2)'
+                    }}>
+                      {photo.thumbnail_url ? (
+                        <img src={photo.thumbnail_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      ) : (
+                        <div className="flex items-center justify-center h-full w-full text-muted">
+                          <Image size={24} />
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  {clusterPhotos.length === 0 && !loadingClusterPhotos && (
+                    <div className="text-center text-muted col-span-full py-8">No photos found for this person.</div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );

@@ -181,6 +181,8 @@ class FaceDetection(Base):
     cluster_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("face_clusters.id", ondelete="SET NULL"), nullable=True, index=True)
     # Bounding box: [x1, y1, x2, y2]
     bbox: Mapped[dict] = mapped_column(JSON)
+    # Optional cropped face thumbnail R2 key
+    face_key: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     detection_confidence: Mapped[float] = mapped_column(Float)
     quality_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     # 512-dim float32 embedding serialised as bytes

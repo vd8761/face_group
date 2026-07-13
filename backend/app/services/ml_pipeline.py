@@ -38,6 +38,7 @@ class DetectedFace:
     embedding: np.ndarray   # 512-dim float32
     quality_score: float
     is_low_quality: bool
+    face_crop_bytes: bytes  # JPEG encoded face crop
 
 
 def detect_and_embed(image_bytes: bytes) -> List[DetectedFace]:
@@ -60,6 +61,9 @@ def detect_and_embed(image_bytes: bytes) -> List[DetectedFace]:
     if max(h, w) > 1920:
         scale = 1920 / max(h, w)
         img = cv2.resize(img, (int(w * scale), int(h * scale)))
+    
+    # Store dimensions for bounds checking
+    img_h, img_w = img.shape[:2]
 
     faces = app.get(img)
     results: List[DetectedFace] = []
@@ -77,6 +81,18 @@ def detect_and_embed(image_bytes: bytes) -> List[DetectedFace]:
 
         size_score = min(1.0, min(w_face, h_face) / 200.0)
         quality_score = float(np.sqrt(confidence * size_score))
+        
+        # Extract face crop with a small margin
+        margin_x = int(w_face * 0.2)
+        margin_y = int(h_face * 0.2)
+        x1 = max(0, bbox[0] - margin_x)
+        y1 = max(0, bbox[1] - margin_y)
+        x2 = min(img_w, bbox[2] + margin_x)
+        y2 = min(img_h, bbox[3] + margin_y)
+        
+        face_crop = img[y1:y2, x1:x2]
+        _, buffer = cv2.imencode('.jpg', face_crop, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+        face_crop_bytes = buffer.tobytes()
 
         results.append(DetectedFace(
             bbox=bbox,
@@ -84,6 +100,7 @@ def detect_and_embed(image_bytes: bytes) -> List[DetectedFace]:
             embedding=embedding,
             quality_score=quality_score,
             is_low_quality=is_low_quality,
+            face_crop_bytes=face_crop_bytes,
         ))
 
     return results

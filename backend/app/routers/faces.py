@@ -223,10 +223,13 @@ async def list_clusters(
         detections = det_result.scalars().all()
         thumbnails = []
         for det in detections:
-            photo_result = await db.execute(select(Photo).where(Photo.id == det.photo_id))
-            photo = photo_result.scalar_one_or_none()
-            if photo and photo.thumbnail_key:
-                thumbnails.append(generate_presigned_url(photo.thumbnail_key, expires_in=3600))
+            if det.face_key:
+                thumbnails.append(generate_presigned_url(det.face_key, expires_in=3600))
+            else:
+                photo_result = await db.execute(select(Photo).where(Photo.id == det.photo_id))
+                photo = photo_result.scalar_one_or_none()
+                if photo and photo.thumbnail_key:
+                    thumbnails.append(generate_presigned_url(photo.thumbnail_key, expires_in=3600))
 
         out.append(ClusterResponse(
             id=cluster.id,
@@ -236,6 +239,40 @@ async def list_clusters(
             sample_thumbnails=thumbnails,
         ))
     return out
+
+
+@router.get("/events/{event_id}/clusters/{cluster_id}/photos", response_model=list[PhotoResponse])
+async def get_cluster_photos(
+    event_id: uuid.UUID,
+    cluster_id: uuid.UUID,
+    current_user: User = Depends(require_organizer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Retrieve all full-sized photos mapped to a specific face cluster."""
+    det_result = await db.execute(
+        select(FaceDetection).where(FaceDetection.cluster_id == cluster_id)
+    )
+    detections = det_result.scalars().all()
+    photo_ids = list({d.photo_id for d in detections})
+    
+    if not photo_ids:
+        return []
+
+    photo_result = await db.execute(select(Photo).where(Photo.id.in_(photo_ids)))
+    photos = photo_result.scalars().all()
+
+    photo_responses = [
+        PhotoResponse(
+            id=p.id,
+            filename=p.filename,
+            status=p.status,
+            error_message=p.error_message,
+            uploaded_at=p.uploaded_at,
+            thumbnail_url=generate_presigned_url(p.thumbnail_key, expires_in=3600) if p.thumbnail_key else None,
+        )
+        for p in photos
+    ]
+    return photo_responses
 
 
 @router.post("/clusters/merge", response_model=MessageResponse)

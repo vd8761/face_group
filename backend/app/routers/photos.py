@@ -38,6 +38,7 @@ async def _process_photos_background(
     photo_ids: List[str],
     file_bytes_list: List[bytes],
     event_id: uuid.UUID,
+    event: Event,
 ):
     """
     Run face detection + clustering on each photo after the HTTP 202 response
@@ -47,6 +48,7 @@ async def _process_photos_background(
     from ..database import async_session_maker
     from ..services.ml_pipeline import detect_and_embed, embedding_to_bytes
     from ..services.clustering import assign_to_cluster, create_new_cluster
+    from ..services.storage import upload_face_crop
     from fastapi.concurrency import run_in_threadpool
 
     for pid, data_bytes in zip(photo_ids, file_bytes_list):
@@ -69,6 +71,16 @@ async def _process_photos_background(
                     await db.flush()
 
                     if not face.is_low_quality:
+                        # Upload crop to R2 and save the key
+                        face_key = await upload_face_crop(
+                            face.face_crop_bytes,
+                            event.tenant_id,
+                            event_id,
+                            detection.id
+                        )
+                        detection.face_key = face_key
+                        await db.flush()
+
                         cluster_id = await assign_to_cluster(
                             detection.id, face.embedding, event_id, db
                         )
@@ -210,6 +222,7 @@ async def upload_photos(
             photo_ids=created_ids,
             file_bytes_list=file_bytes_list,
             event_id=event_id,
+            event=event,
         )
 
     # ── Return 202 immediately — frontend shows green success ─────────────────
@@ -459,7 +472,18 @@ async def _process_drive_import(
                         )
                         db.add(detection)
                         await db.flush()
+                        
                         if not face.is_low_quality:
+                            # Upload face crop to R2
+                            face_key = await upload_face_crop(
+                                face.face_crop_bytes,
+                                event.tenant_id,
+                                event_id,
+                                detection.id
+                            )
+                            detection.face_key = face_key
+                            await db.flush()
+
                             cluster_id = await assign_to_cluster(
                                 detection.id, face.embedding, event_id, db
                             )

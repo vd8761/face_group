@@ -95,6 +95,23 @@ async def upload_thumbnail(
     return key
 
 
+async def upload_face_crop(
+    data: bytes,
+    tenant_id: uuid.UUID,
+    event_id: uuid.UUID,
+    detection_id: uuid.UUID,
+) -> str:
+    """Upload a pre-cropped and JPEG-encoded face crop to R2."""
+    key = f"{tenant_id}/{event_id}/faces/{detection_id}.jpg"
+    get_s3_client().put_object(
+        Bucket=settings.R2_BUCKET_NAME,
+        Key=key,
+        Body=data,
+        ContentType="image/jpeg",
+    )
+    return key
+
+
 def generate_presigned_url(key: str, expires_in: int = 3600) -> str:
     """Generate a time-limited presigned URL for a private R2 object."""
     return get_s3_client().generate_presigned_url(
