@@ -3,17 +3,17 @@
 /* ─── Design Tokens ────────────────────────────────────────────────────────── */
 :root {
   /* Colors */
-  --color-bg:           #070711;
-  --color-surface:      #0e0e1a;
-  --color-surface-2:    #13131f;
-  --color-surface-3:    #1a1a2e;
-  --color-border:       rgba(255,255,255,0.07);
-  --color-border-hover: rgba(255,255,255,0.14);
+  --color-bg:           #f8fafc;
+  --color-surface:      #ffffff;
+  --color-surface-2:    #f1f5f9;
+  --color-surface-3:    #e2e8f0;
+  --color-border:       rgba(0,0,0,0.1);
+  --color-border-hover: rgba(0,0,0,0.18);
 
   /* Accent — electric violet */
   --accent:         #7c3aed;
-  --accent-light:   #a855f7;
-  --accent-glow:    rgba(124,58,237,0.35);
+  --accent-light:   #9333ea;
+  --accent-glow:    rgba(124,58,237,0.2);
   --accent-soft:    rgba(124,58,237,0.12);
 
   /* Accent secondary — rose */
@@ -21,15 +21,15 @@
   --accent2-soft:   rgba(236,72,153,0.12);
 
   /* Text */
-  --text-primary:   #f0f0ff;
-  --text-secondary: #9090b8;
-  --text-muted:     #5a5a7a;
+  --text-primary:   #0f172a;
+  --text-secondary: #475569;
+  --text-muted:     #94a3b8;
 
   /* Status */
-  --success:  #22c55e;
-  --warning:  #f59e0b;
-  --error:    #ef4444;
-  --info:     #3b82f6;
+  --success:  #16a34a;
+  --warning:  #d97706;
+  --error:    #dc2626;
+  --info:     #2563eb;
 
   /* Spacing */
   --radius-sm:  6px;
@@ -39,9 +39,9 @@
   --radius-2xl: 32px;
 
   /* Shadows */
-  --shadow-glow:   0 0 40px rgba(124,58,237,0.25);
-  --shadow-card:   0 4px 32px rgba(0,0,0,0.4);
-  --shadow-sm:     0 2px 8px rgba(0,0,0,0.3);
+  --shadow-glow:   0 0 40px rgba(124,58,237,0.15);
+  --shadow-card:   0 8px 32px rgba(0,0,0,0.06);
+  --shadow-sm:     0 2px 8px rgba(0,0,0,0.05);
 }
 
 /* ─── Reset & Base ──────────────────────────────────────────────────────────── */
@@ -78,7 +78,7 @@ p  { line-height: 1.7; color: var(--text-secondary); }
 
 /* ─── Glass Card ────────────────────────────────────────────────────────────── */
 .card {
-  background: rgba(14,14,26,0.7);
+  background: rgba(255,255,255,0.7);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border: 1px solid var(--color-border);
@@ -212,8 +212,8 @@ p  { line-height: 1.7; color: var(--text-secondary); }
   position: sticky;
   top: 0;
   z-index: 50;
-  background: rgba(7,7,17,0.85);
-  backdrop-filter: blur(20px);
+  background: rgba(248,250,252,0.85);
+  backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(20px);
   border-bottom: 1px solid var(--color-border);
   padding: 0 1.5rem;
@@ -364,8 +364,8 @@ p  { line-height: 1.7; color: var(--text-secondary); }
   bottom: 2rem;
   left: 50%;
   transform: translateX(-50%);
-  background: rgba(14,14,26,0.95);
-  backdrop-filter: blur(20px);
+  background: rgba(255,255,255,0.95);
+  backdrop-filter: blur(16px);
   border: 1px solid var(--color-border);
   border-radius: 999px;
   padding: 0.75rem 1.5rem;

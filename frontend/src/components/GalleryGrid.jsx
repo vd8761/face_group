@@ -25,7 +25,7 @@ export default function GalleryGrid({ photos, selected, onToggle }) {
           {/* Hover overlay */}
           <div style={{
             position: 'absolute', inset: 0,
-            background: 'linear-gradient(to top, rgba(7,7,17,0.6) 0%, transparent 50%)',
+            background: 'linear-gradient(to top, rgba(0,0,0,0.6) 0%, transparent 50%)',
             opacity: 0,
             transition: 'opacity 0.2s',
             borderRadius: '10px',
