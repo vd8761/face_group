@@ -1,12 +1,13 @@
 FROM python:3.11-slim
 
-# System dependencies for OpenCV + InsightFace
+# System dependencies for dlib (face_recognition) + Pillow
 RUN apt-get update && apt-get install -y \
     build-essential \
+    cmake \
+    libopenblas-dev \
+    liblapack-dev \
+    libx11-dev \
     python3-dev \
-    libglib2.0-0 \
-    libgl1 \
-    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -14,10 +15,6 @@ WORKDIR /app
 # Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Pre-download InsightFace model pack (buffalo_l) at build time
-# so cold starts don't trigger model download
-RUN python -c "from insightface.app import FaceAnalysis; app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider']); app.prepare(ctx_id=0, det_size=(640,640))"
 
 COPY . .
 

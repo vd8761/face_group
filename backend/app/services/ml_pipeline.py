@@ -1,81 +1,77 @@
 """
-ML pipeline service — face detection and embedding using InsightFace.
-Uses the buffalo_l model pack (RetinaFace detector + ArcFace embedder).
+ML pipeline service — face detection and embedding using face_recognition (dlib).
+
+Why face_recognition instead of InsightFace:
+  - InsightFace (buffalo_l) requires ~1-2 GB RAM → OOM on Render free tier (512MB)
+  - face_recognition (dlib HOG) uses ~120 MB RAM → fits comfortably on free tier
+  - 128-dim embeddings are sufficient for face grouping/clustering
 """
 import io
 import numpy as np
-from typing import List, Optional
+from typing import List
 from dataclasses import dataclass
 
 from ..config import get_settings
 
 settings = get_settings()
 
-# InsightFace is loaded lazily (heavy model download on first use)
-_app = None
-
-
-def _get_insightface_app():
-    global _app
-    if _app is None:
-        import insightface
-        from insightface.app import FaceAnalysis
-        _app = FaceAnalysis(
-            name=settings.INSIGHTFACE_MODEL,
-            providers=["CPUExecutionProvider"],  # Use CUDAExecutionProvider if GPU available
-        )
-        _app.prepare(ctx_id=0, det_size=(640, 640))
-    return _app
-
 
 @dataclass
 class DetectedFace:
-    bbox: list          # [x1, y1, x2, y2]
-    confidence: float
-    embedding: np.ndarray   # 512-dim float32
+    bbox: list           # [x1, y1, x2, y2]
+    confidence: float    # always 1.0 for dlib (binary detection)
+    embedding: np.ndarray  # 128-dim float64
     quality_score: float
     is_low_quality: bool
 
 
 def detect_and_embed(image_bytes: bytes) -> List[DetectedFace]:
     """
-    Run face detection + embedding on raw image bytes.
+    Run face detection + embedding on raw image bytes using face_recognition (dlib).
     Returns a list of DetectedFace objects, one per detected face.
-    Faces below confidence or size thresholds are marked as low_quality.
     """
-    import cv2
+    import face_recognition
 
-    app = _get_insightface_app()
+    # Decode image via Pillow (avoids OpenCV dependency)
+    from PIL import Image
+    img_pil = Image.open(io.BytesIO(image_bytes)).convert("RGB")
 
-    # Decode image
-    nparr = np.frombuffer(image_bytes, np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    if img is None:
-        raise ValueError("Could not decode image — unsupported format or corrupted file.")
+    # Downscale large images to prevent OOM during face detection
+    MAX_DIM = 1280
+    w, h = img_pil.size
+    if max(w, h) > MAX_DIM:
+        scale = MAX_DIM / max(w, h)
+        img_pil = img_pil.resize(
+            (int(w * scale), int(h * scale)),
+            Image.LANCZOS
+        )
 
-    faces = app.get(img)
+    img_array = np.array(img_pil)
+
+    # Detect face locations (HOG model is CPU-friendly, ~80MB RAM)
+    locations = face_recognition.face_locations(img_array, model="hog")
+
+    if not locations:
+        return []
+
+    # Compute 128-dim embeddings for each face
+    encodings = face_recognition.face_encodings(img_array, locations)
+
     results: List[DetectedFace] = []
+    for (top, right, bottom, left), encoding in zip(locations, encodings):
+        w_face = right - left
+        h_face = bottom - top
+        face_size_ok = (w_face >= settings.FACE_MIN_SIZE and h_face >= settings.FACE_MIN_SIZE)
+        is_low_quality = not face_size_ok
 
-    for face in faces:
-        bbox = face.bbox.astype(int).tolist()   # [x1, y1, x2, y2]
-        confidence = float(face.det_score)
-        embedding = face.normed_embedding          # Already L2-normalised by InsightFace
-
-        # Quality checks
-        w = bbox[2] - bbox[0]
-        h = bbox[3] - bbox[1]
-        face_size_ok = (w >= settings.FACE_MIN_SIZE and h >= settings.FACE_MIN_SIZE)
-        confidence_ok = confidence >= settings.FACE_DETECTION_THRESHOLD
-        is_low_quality = not (face_size_ok and confidence_ok)
-
-        # Simple quality score: geometric mean of confidence and normalised face size
-        size_score = min(1.0, min(w, h) / 200.0)
-        quality_score = float(np.sqrt(confidence * size_score))
+        # Quality score: normalised face area
+        size_score = min(1.0, min(w_face, h_face) / 200.0)
+        quality_score = float(size_score)
 
         results.append(DetectedFace(
-            bbox=bbox,
-            confidence=confidence,
-            embedding=embedding,
+            bbox=[left, top, right, bottom],  # [x1, y1, x2, y2]
+            confidence=1.0,                   # dlib gives binary yes/no
+            embedding=encoding,               # already L2-normalised
             quality_score=quality_score,
             is_low_quality=is_low_quality,
         ))
@@ -84,18 +80,22 @@ def detect_and_embed(image_bytes: bytes) -> List[DetectedFace]:
 
 
 def embedding_to_bytes(embedding: np.ndarray) -> bytes:
-    """Serialise a float32 embedding numpy array to bytes for DB storage."""
-    return embedding.astype(np.float32).tobytes()
+    """Serialise a float64 embedding numpy array to bytes for DB storage."""
+    return embedding.astype(np.float64).tobytes()
 
 
 def bytes_to_embedding(data: bytes) -> np.ndarray:
-    """Deserialise bytes back to a float32 numpy array."""
-    return np.frombuffer(data, dtype=np.float32).copy()
+    """Deserialise bytes back to a float64 numpy array."""
+    return np.frombuffer(data, dtype=np.float64).copy()
 
 
 def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-    """Cosine similarity between two L2-normalised embeddings (range -1 to 1)."""
-    return float(np.dot(a, b))
+    """Cosine similarity between two embeddings (range -1 to 1)."""
+    norm_a = np.linalg.norm(a)
+    norm_b = np.linalg.norm(b)
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return float(np.dot(a, b) / (norm_a * norm_b))
 
 
 def cosine_distance(a: np.ndarray, b: np.ndarray) -> float:

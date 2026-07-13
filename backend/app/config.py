@@ -72,14 +72,14 @@ class Settings(BaseSettings):
         return v
 
     # ── ML Pipeline ───────────────────────────────────────────────────────────
-    INSIGHTFACE_MODEL: str = "buffalo_l"          # RetinaFace + ArcFace
-    FACE_DETECTION_THRESHOLD: float = 0.7        # Min confidence to accept a detection
+    # face_recognition (dlib HOG) — lightweight, fits Render free tier (512MB)
+    FACE_DETECTION_THRESHOLD: float = 0.6        # Min confidence (unused by dlib, kept for compat)
     FACE_MIN_SIZE: int = 40                       # Min face bounding box width/height (px)
-    EMBEDDING_DIM: int = 512                     # ArcFace output dimension
+    EMBEDDING_DIM: int = 128                     # dlib face_recognition output dimension
 
     # ── HDBSCAN Clustering ────────────────────────────────────────────────────
     HDBSCAN_MIN_CLUSTER_SIZE: int = 2
-    COSINE_MATCH_THRESHOLD: float = 0.35          # < this = same person (lower = stricter)
+    COSINE_MATCH_THRESHOLD: float = 0.40          # dlib uses euclidean ~0.6; cosine ~0.40 for same person
 
     # ── File size limits ──────────────────────────────────────────────────────
     MAX_UPLOAD_SIZE_MB: int = 25                  # Per-photo max
