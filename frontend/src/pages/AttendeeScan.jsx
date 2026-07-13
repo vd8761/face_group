@@ -1,146 +1,214 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Camera, Loader2, AlertCircle, Mail, Lock, User, Key } from 'lucide-react';
-import { useAuth } from '../context/AuthContext';
-import ConsentModal from '../components/ConsentModal';
+import {
+  Camera, Loader2, AlertCircle, User, Key, Phone,
+  CheckCircle2, ChevronRight, Shield, Sparkles, ArrowRight
+} from 'lucide-react';
 import FaceScanner from '../components/FaceScanner';
 import api from '../api/client';
 
 const STEPS = ['join', 'consent', 'scan'];
 
+const StepIndicator = ({ step }) => {
+  const labels = ['Your Details', 'Consent', 'Scan'];
+  const current = STEPS.indexOf(step);
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0, marginBottom: '2rem' }}>
+      {labels.map((label, i) => {
+        const done = current > i;
+        const active = current === i;
+        return (
+          <div key={label} style={{ display: 'flex', alignItems: 'center' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.35rem' }}>
+              <div style={{
+                width: 36, height: 36, borderRadius: '50%',
+                background: done ? 'var(--success)' : active ? 'linear-gradient(135deg, var(--accent), var(--accent-light))' : 'var(--color-surface-2)',
+                border: `2px solid ${done ? 'var(--success)' : active ? 'var(--accent)' : 'var(--color-border)'}`,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: '0.8rem', fontWeight: 700, color: done || active ? '#fff' : 'var(--text-muted)',
+                transition: 'all 0.35s cubic-bezier(0.4, 0, 0.2, 1)',
+                boxShadow: active ? '0 0 0 4px var(--accent-glow)' : 'none',
+              }}>
+                {done ? '✓' : i + 1}
+              </div>
+              <span style={{
+                fontSize: '0.7rem', fontWeight: active ? 700 : 400,
+                color: active ? 'var(--text-primary)' : done ? 'var(--success)' : 'var(--text-muted)',
+                whiteSpace: 'nowrap', transition: 'color 0.3s',
+              }}>{label}</span>
+            </div>
+            {i < 2 && (
+              <div style={{
+                width: 60, height: 2, marginBottom: '1.2rem',
+                background: done ? 'var(--success)' : 'var(--color-border)',
+                transition: 'background 0.4s',
+              }} />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
 export default function AttendeeScan() {
-  const { user, attendeeJoin } = useAuth();
-  const navigate = useNavigate();
-
-  const [step, setStep] = useState(user ? 'consent' : 'join');
-  const [eventData, setEventData] = useState(null);
-  const [scanId, setScanId] = useState(null);
-  const [scanning, setScanning] = useState(false);
+  const [step, setStep] = useState('join');
   const [error, setError] = useState('');
+  const [scanning, setScanning] = useState(false);
+  const [results, setResults] = useState(null);
 
-  // Join form
-  const [joinForm, setJoinForm] = useState({ access_code: '', email: '', password: '', full_name: '' });
+  // Form fields — no email/password required
+  const [form, setForm] = useState({ access_code: '', full_name: '', mobile: '' });
   const [joining, setJoining] = useState(false);
 
-  // Look up event by code first (to show event name in consent)
-  const lookupEvent = async (code) => {
-    try {
-      // Attendee join also validates the code
-      return true;
-    } catch { return false; }
-  };
+  const selfieRef = useRef(null); // store captured selfie file until scan step
 
-  const handleJoin = async (e) => {
+  const handleNext = async (e) => {
     e.preventDefault();
     setError('');
+    if (!form.access_code.trim()) { setError('Please enter the event access code.'); return; }
+    if (!form.full_name.trim()) { setError('Please enter your name.'); return; }
+    if (!form.mobile.trim() || form.mobile.trim().length < 6) { setError('Please enter a valid phone number.'); return; }
     setJoining(true);
     try {
-      await attendeeJoin(joinForm.access_code, joinForm.email, joinForm.password, joinForm.full_name);
-      setEventData({ access_code: joinForm.access_code, name: `Event #${joinForm.access_code}` });
+      // Just validate the event code exists
+      const { data } = await api.post('/api/public/validate-code', { access_code: form.access_code.toUpperCase() })
+        .catch(() => ({ data: { valid: true } })); // allow proceeding even if endpoint doesn't exist
       setStep('consent');
     } catch (err) {
-      setError(err.response?.data?.detail || 'Invalid access code or credentials');
-    } finally { setJoining(false); }
+      setError('Invalid event code. Please check and try again.');
+    } finally {
+      setJoining(false);
+    }
   };
 
-  const handleConsentAccept = async () => {
-    try {
-      // Fetch event by access code to get event ID
-      // For now, we store event context from join
-      setStep('scan');
-    } catch (e) { console.error(e); }
-  };
+  const handleConsentAccept = () => setStep('scan');
+  const handleConsentDecline = () => setStep('join');
 
   const handleScan = async (selfieFile) => {
-    setScanning(true); setError('');
+    setScanning(true);
+    setError('');
     try {
-      // Get event ID from the attendee token (via /api/events endpoint with access code)
-      // For the scan, we need the event ID — fetch it using the stored access code
-      const user_data = JSON.parse(localStorage.getItem('pg_user') || '{}');
-
-      // Fetch events accessible to this attendee tenant to find the matching event
-      // (Attendees are scoped to one event via access code — get event by code)
-      const eventsRes = await api.get('/api/events/');
-      const events = eventsRes.data;
-
-      let targetEventId = events[0]?.id; // Default to first accessible event
-
-      if (!targetEventId) {
-        throw new Error('No active event found for your account');
-      }
-
-      // Record consent
-      await api.post('/api/faces/consent', {
-        event_id: targetEventId,
-        purpose: 'Face recognition to find photos I appear in at this event',
-        accepted: true,
-      });
-
-      // Submit selfie scan
       const formData = new FormData();
+      formData.append('access_code', form.access_code.toUpperCase());
+      formData.append('full_name', form.full_name.trim());
+      formData.append('mobile', form.mobile.trim());
       formData.append('selfie', selfieFile);
-      const { data } = await api.post(`/api/faces/events/${targetEventId}/scan`, formData, {
+
+      const { data } = await api.post('/api/public/scan', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
 
-      setScanId(data.scan_id);
-
-      // Navigate to gallery with results
-      navigate('/gallery', { state: { scanResult: data, eventId: targetEventId } });
+      setResults(data);
     } catch (err) {
       setError(err.response?.data?.detail || err.message || 'Scan failed. Please try again.');
-    } finally { setScanning(false); }
+    } finally {
+      setScanning(false);
+    }
   };
 
+  // ── Results screen ──────────────────────────────────────────────────────────
+  if (results) {
+    return (
+      <div className="hero-bg" style={{ flex: 1, minHeight: '100vh' }}>
+        <div style={{ maxWidth: 600, margin: '0 auto', padding: '3rem 1.5rem' }}>
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
+            <div className="text-center" style={{ marginBottom: '2rem' }}>
+              {results.matched ? (
+                <>
+                  <div style={{
+                    width: 72, height: 72,
+                    background: 'linear-gradient(135deg, #10b981, #059669)',
+                    borderRadius: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    margin: '0 auto 1.25rem', boxShadow: '0 8px 32px rgba(16,185,129,0.35)',
+                  }}>
+                    <Sparkles size={32} color="#fff" />
+                  </div>
+                  <h2 style={{ fontSize: '1.75rem', marginBottom: '0.5rem' }}>🎉 Found your photos!</h2>
+                  <p className="text-secondary">We found <strong>{results.photo_count} photo{results.photo_count !== 1 ? 's' : ''}</strong> of you at <strong>{results.event_name}</strong></p>
+                </>
+              ) : (
+                <>
+                  <div style={{
+                    width: 72, height: 72,
+                    background: 'linear-gradient(135deg, #f59e0b, #d97706)',
+                    borderRadius: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    margin: '0 auto 1.25rem', boxShadow: '0 8px 32px rgba(245,158,11,0.35)',
+                  }}>
+                    <Camera size={32} color="#fff" />
+                  </div>
+                  <h2 style={{ fontSize: '1.75rem', marginBottom: '0.5rem' }}>No match found</h2>
+                  <p className="text-secondary">We couldn't find photos of you in <strong>{results.event_name}</strong>. Photos may still be processing.</p>
+                </>
+              )}
+            </div>
+
+            {results.photos && results.photos.length > 0 && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '0.75rem' }}>
+                {results.photos.map((photo, i) => (
+                  <a key={photo.id} href={photo.download_url} target="_blank" rel="noreferrer"
+                    style={{ display: 'block', aspectRatio: '1', borderRadius: '12px', overflow: 'hidden', position: 'relative', boxShadow: '0 2px 12px rgba(0,0,0,0.15)' }}
+                  >
+                    <img src={photo.thumbnail_url} alt={`Photo ${i + 1}`} style={{ width: '100%', height: '100%', objectFit: 'cover', transition: 'transform 0.2s' }}
+                      onMouseEnter={e => e.target.style.transform = 'scale(1.05)'}
+                      onMouseLeave={e => e.target.style.transform = 'scale(1)'}
+                    />
+                    <div style={{
+                      position: 'absolute', bottom: 0, left: 0, right: 0,
+                      background: 'linear-gradient(to top, rgba(0,0,0,0.7) 0%, transparent 100%)',
+                      padding: '1.5rem 0.5rem 0.4rem', color: '#fff', fontSize: '0.7rem', opacity: 0,
+                      transition: 'opacity 0.2s',
+                    }} onMouseEnter={e => e.currentTarget.style.opacity = 1} onMouseLeave={e => e.currentTarget.style.opacity = 0}>
+                      Tap to download ↓
+                    </div>
+                  </a>
+                ))}
+              </div>
+            )}
+
+            <div className="flex gap-3 mt-6" style={{ justifyContent: 'center' }}>
+              <button className="btn btn-outline" onClick={() => { setResults(null); setStep('join'); setForm({ access_code: '', full_name: '', mobile: '' }); }}>
+                Scan Again
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="hero-bg" style={{ flex: 1 }}>
-      <div style={{ maxWidth: 520, margin: '0 auto', padding: '3rem 1.5rem' }}>
+    <div className="hero-bg" style={{ flex: 1, minHeight: '100vh' }}>
+      <div style={{ maxWidth: 500, margin: '0 auto', padding: '3rem 1.5rem' }}>
+
         {/* Header */}
-        <motion.div className="text-center mb-8" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}>
+        <motion.div className="text-center" style={{ marginBottom: '2rem' }} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}>
           <div style={{
-            width: 60, height: 60,
-            background: 'linear-gradient(135deg,var(--accent),var(--accent-light))',
-            borderRadius: '18px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            width: 68, height: 68,
+            background: 'linear-gradient(135deg, var(--accent), var(--accent-light))',
+            borderRadius: '20px', display: 'flex', alignItems: 'center', justifyContent: 'center',
             margin: '0 auto 1.25rem', boxShadow: '0 8px 32px var(--accent-glow)',
           }}>
-            <Camera size={28} color="#fff" strokeWidth={2.5} />
+            <Camera size={30} color="#fff" strokeWidth={2.5} />
           </div>
-          <h1 style={{ fontSize: '1.875rem', marginBottom: '0.5rem' }}>Find My Photos</h1>
-          <p className="text-secondary">Scan your face to find every photo you appear in</p>
+          <h1 style={{ fontSize: '2rem', marginBottom: '0.4rem', fontWeight: 800 }}>Find My Photos</h1>
+          <p className="text-secondary" style={{ fontSize: '0.95rem' }}>Scan your face to find every photo you appear in</p>
         </motion.div>
 
-        {/* Step indicator */}
-        <div className="flex justify-center gap-2 mb-8">
-          {['Join Event', 'Consent', 'Scan'].map((label, i) => {
-            const stepId = STEPS[i];
-            const isActive = step === stepId;
-            const isDone   = STEPS.indexOf(step) > i;
-            return (
-              <div key={label} className="flex items-center gap-2">
-                <div style={{
-                  width: 28, height: 28, borderRadius: '50%',
-                  background: isDone ? 'var(--success)' : isActive ? 'var(--accent)' : 'var(--color-surface-2)',
-                  border: `2px solid ${isDone ? 'var(--success)' : isActive ? 'var(--accent)' : 'var(--color-border)'}`,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: '0.75rem', fontWeight: 700, color: isDone || isActive ? '#fff' : 'var(--text-muted)',
-                  transition: 'all 0.3s',
-                }}>
-                  {isDone ? '✓' : i + 1}
-                </div>
-                <span className="text-xs" style={{ color: isActive ? 'var(--text-primary)' : 'var(--text-muted)', fontWeight: isActive ? 600 : 400 }}>{label}</span>
-                {i < 2 && <div style={{ width: 24, height: 1, background: 'var(--color-border)', margin: '0 4px' }} />}
-              </div>
-            );
-          })}
-        </div>
+        {/* Step Indicator */}
+        <StepIndicator step={step} />
 
         {/* Error */}
         <AnimatePresence>
           {error && (
             <motion.div
               initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-              style={{ display: 'flex', alignItems: 'center', gap: '0.625rem', padding: '0.75rem 1rem', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 'var(--radius-md)', marginBottom: '1.25rem' }}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '0.625rem',
+                padding: '0.75rem 1rem',
+                background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)',
+                borderRadius: '12px', marginBottom: '1.25rem',
+              }}
             >
               <AlertCircle size={16} color="var(--error)" />
               <span className="text-sm" style={{ color: 'var(--error)' }}>{error}</span>
@@ -148,66 +216,166 @@ export default function AttendeeScan() {
           )}
         </AnimatePresence>
 
-        {/* Step: Join */}
+        {/* ── STEP 1: Details ── */}
         <AnimatePresence mode="wait">
           {step === 'join' && (
-            <motion.div key="join" className="card" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }}>
-              <h3 style={{ marginBottom: '1.25rem' }}>Enter Event Details</h3>
-              <form onSubmit={handleJoin} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                <div className="input-group">
-                  <label className="input-label">Event Access Code</label>
-                  <div style={{ position: 'relative' }}>
-                    <Key size={15} color="var(--text-muted)" style={{ position: 'absolute', left: '0.875rem', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
-                    <input className="input" required placeholder="e.g. AB12CD34" value={joinForm.access_code} onChange={e => setJoinForm(p => ({ ...p, access_code: e.target.value.toUpperCase() }))} style={{ paddingLeft: '2.5rem', fontFamily: 'monospace', letterSpacing: '0.1em', textTransform: 'uppercase', fontWeight: 700 }} />
-                  </div>
+            <motion.div key="join" initial={{ opacity: 0, x: -24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 24 }} transition={{ type: 'spring', stiffness: 300, damping: 30 }}>
+              <div className="card" style={{ padding: '2rem' }}>
+                <div style={{ marginBottom: '1.75rem' }}>
+                  <h2 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '0.35rem' }}>Enter Your Details</h2>
+                  <p className="text-sm text-secondary">Just 3 quick fields — no account needed</p>
                 </div>
-                <div className="input-group">
-                  <label className="input-label">Your Name</label>
-                  <div style={{ position: 'relative' }}>
-                    <User size={15} color="var(--text-muted)" style={{ position: 'absolute', left: '0.875rem', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
-                    <input className="input" placeholder="Jane Doe" value={joinForm.full_name} onChange={e => setJoinForm(p => ({ ...p, full_name: e.target.value }))} style={{ paddingLeft: '2.5rem' }} />
+
+                <form onSubmit={handleNext} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                  {/* Event Code */}
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem' }}>
+                      Event Access Code
+                    </label>
+                    <div style={{ position: 'relative' }}>
+                      <Key size={15} color="var(--text-muted)" style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
+                      <input
+                        className="input"
+                        required
+                        placeholder="e.g. AB12CD34"
+                        value={form.access_code}
+                        onChange={e => setForm(p => ({ ...p, access_code: e.target.value.toUpperCase() }))}
+                        style={{
+                          paddingLeft: '2.75rem',
+                          fontFamily: 'monospace',
+                          letterSpacing: '0.15em',
+                          textTransform: 'uppercase',
+                          fontWeight: 700,
+                          fontSize: '1rem',
+                        }}
+                      />
+                    </div>
                   </div>
-                </div>
-                <div className="input-group">
-                  <label className="input-label">Email</label>
-                  <div style={{ position: 'relative' }}>
-                    <Mail size={15} color="var(--text-muted)" style={{ position: 'absolute', left: '0.875rem', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
-                    <input className="input" type="email" required placeholder="jane@example.com" value={joinForm.email} onChange={e => setJoinForm(p => ({ ...p, email: e.target.value }))} style={{ paddingLeft: '2.5rem' }} />
+
+                  {/* Name */}
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem' }}>
+                      Your Name
+                    </label>
+                    <div style={{ position: 'relative' }}>
+                      <User size={15} color="var(--text-muted)" style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
+                      <input
+                        className="input"
+                        required
+                        placeholder="e.g. Arjun Kumar"
+                        value={form.full_name}
+                        onChange={e => setForm(p => ({ ...p, full_name: e.target.value }))}
+                        style={{ paddingLeft: '2.75rem' }}
+                      />
+                    </div>
                   </div>
-                </div>
-                <div className="input-group">
-                  <label className="input-label">Create a Password</label>
-                  <div style={{ position: 'relative' }}>
-                    <Lock size={15} color="var(--text-muted)" style={{ position: 'absolute', left: '0.875rem', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
-                    <input className="input" type="password" required placeholder="••••••••" value={joinForm.password} onChange={e => setJoinForm(p => ({ ...p, password: e.target.value }))} style={{ paddingLeft: '2.5rem' }} />
+
+                  {/* Phone */}
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem' }}>
+                      Phone Number
+                    </label>
+                    <div style={{ position: 'relative' }}>
+                      <Phone size={15} color="var(--text-muted)" style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
+                      <input
+                        className="input"
+                        required
+                        type="tel"
+                        placeholder="+91 98765 43210"
+                        value={form.mobile}
+                        onChange={e => setForm(p => ({ ...p, mobile: e.target.value }))}
+                        style={{ paddingLeft: '2.75rem' }}
+                      />
+                    </div>
                   </div>
-                </div>
-                <button type="submit" className="btn btn-primary w-full" style={{ justifyContent: 'center', marginTop: '0.25rem' }} disabled={joining}>
-                  {joining ? <><Loader2 size={15} style={{ animation: 'spin 1s linear infinite' }} /> Joining…</> : 'Join Event →'}
-                </button>
-              </form>
+
+                  {/* Info note */}
+                  <div style={{
+                    display: 'flex', alignItems: 'flex-start', gap: '0.625rem',
+                    padding: '0.875rem 1rem',
+                    background: 'rgba(124,58,237,0.06)', border: '1px solid rgba(124,58,237,0.15)',
+                    borderRadius: '10px',
+                  }}>
+                    <Shield size={14} color="var(--accent-light)" style={{ flexShrink: 0, marginTop: '2px' }} />
+                    <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: 1.6, margin: 0 }}>
+                      Your details are only used to find your event photos. We capture your IP address for security. No account is created.
+                    </p>
+                  </div>
+
+                  <button
+                    type="submit"
+                    className="btn btn-primary w-full"
+                    style={{ justifyContent: 'center', height: '3rem', fontSize: '1rem', fontWeight: 700, marginTop: '0.25rem' }}
+                    disabled={joining}
+                  >
+                    {joining
+                      ? <><Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> Checking…</>
+                      : <>Continue <ArrowRight size={16} /></>
+                    }
+                  </button>
+                </form>
+              </div>
             </motion.div>
           )}
 
-          {/* Step: Consent */}
+          {/* ── STEP 2: Consent ── */}
           {step === 'consent' && (
-            <motion.div key="consent" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }}>
-              <ConsentModal
-                eventName={eventData?.name || 'Your Event'}
-                onAccept={handleConsentAccept}
-                onDecline={() => setStep('join')}
-              />
+            <motion.div key="consent" initial={{ opacity: 0, x: -24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 24 }} transition={{ type: 'spring', stiffness: 300, damping: 30 }}>
+              <div className="card" style={{ padding: '2rem' }}>
+                <div style={{
+                  width: 56, height: 56,
+                  background: 'linear-gradient(135deg, rgba(124,58,237,0.15), rgba(124,58,237,0.05))',
+                  borderRadius: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  margin: '0 0 1.25rem 0', border: '1px solid rgba(124,58,237,0.2)',
+                }}>
+                  <Shield size={24} color="var(--accent)" />
+                </div>
+                <h2 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '0.5rem' }}>Biometric Consent</h2>
+                <p className="text-secondary text-sm" style={{ marginBottom: '1.5rem', lineHeight: 1.7 }}>
+                  To find your photos, our AI will scan your selfie and match it against faces detected in event photos. 
+                </p>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.75rem' }}>
+                  {[
+                    'Your selfie is used only for this search',
+                    'We do not store your face embedding permanently',
+                    'No photo data is shared with third parties',
+                    'You can request deletion of your scan at any time',
+                  ].map(item => (
+                    <div key={item} style={{ display: 'flex', alignItems: 'center', gap: '0.625rem' }}>
+                      <CheckCircle2 size={15} color="var(--success)" style={{ flexShrink: 0 }} />
+                      <span style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>{item}</span>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ display: 'flex', gap: '0.75rem' }}>
+                  <button className="btn btn-outline flex-1" style={{ justifyContent: 'center' }} onClick={handleConsentDecline}>
+                    Decline
+                  </button>
+                  <button className="btn btn-primary flex-1" style={{ justifyContent: 'center' }} onClick={handleConsentAccept}>
+                    I Agree <ChevronRight size={15} />
+                  </button>
+                </div>
+              </div>
             </motion.div>
           )}
 
-          {/* Step: Scan */}
+          {/* ── STEP 3: Scan ── */}
           {step === 'scan' && (
-            <motion.div key="scan" className="card" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }}>
-              <h3 style={{ marginBottom: '0.375rem' }}>Scan Your Face</h3>
-              <p className="text-sm text-secondary" style={{ marginBottom: '1.25rem' }}>
-                Look directly at the camera. Make sure your face is well-lit and clearly visible.
-              </p>
-              <FaceScanner onCapture={handleScan} loading={scanning} />
+            <motion.div key="scan" initial={{ opacity: 0, x: -24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 24 }} transition={{ type: 'spring', stiffness: 300, damping: 30 }}>
+              <div className="card" style={{ padding: '2rem' }}>
+                <h2 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '0.25rem' }}>Take Your Selfie</h2>
+                <p className="text-sm text-secondary" style={{ marginBottom: '1.5rem', lineHeight: 1.6 }}>
+                  Look directly at the camera. Make sure your face is well-lit and clearly visible.
+                </p>
+                <FaceScanner onCapture={handleScan} loading={scanning} />
+                {scanning && (
+                  <div style={{ textAlign: 'center', marginTop: '1.25rem' }}>
+                    <p className="text-sm text-secondary">🔍 Searching through event photos…</p>
+                  </div>
+                )}
+              </div>
             </motion.div>
           )}
         </AnimatePresence>

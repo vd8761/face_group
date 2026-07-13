@@ -19,6 +19,24 @@ settings = get_settings()
 router = APIRouter(prefix="/public", tags=["Public"])
 
 
+@router.post("/validate-code")
+async def validate_event_code(
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """Check whether an event access code is valid (no auth required)."""
+    code = body.get("access_code", "").upper().strip()
+    if not code:
+        raise HTTPException(status_code=422, detail="access_code is required")
+    result = await db.execute(
+        select(Event).where(Event.access_code == code, Event.is_active == True)
+    )
+    event = result.scalar_one_or_none()
+    if not event:
+        raise HTTPException(status_code=404, detail="Invalid event code. Please check and try again.")
+    return {"valid": True, "event_name": event.name}
+
+
 @router.post("/scan")
 async def public_selfie_scan(
     request: Request,
