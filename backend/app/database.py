@@ -46,10 +46,23 @@ async def get_db():
 
 async def init_db():
     """Create all tables and run safe schema migrations."""
+    from sqlalchemy import text
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        # Safe migration: add content_hash column to photos if it doesn't exist yet
-        # (create_all doesn't modify existing tables)
-        await conn.execute(__import__('sqlalchemy').text(
-            "ALTER TABLE photos ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64)"
-        ))
+
+        # ── Safe column migrations ──────────────────────────────────────────
+        # These use ADD COLUMN IF NOT EXISTS so they are idempotent — safe to
+        # run on every startup even if the column already exists.
+
+        migrations = [
+            # photos table
+            "ALTER TABLE photos ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64)",
+
+            # face_detections table — face_key was added after initial deploy
+            "ALTER TABLE face_detections ADD COLUMN IF NOT EXISTS face_key VARCHAR(500)",
+        ]
+
+        for sql in migrations:
+            await conn.execute(text(sql))
+
+        print("✅ DB schema migrations applied")

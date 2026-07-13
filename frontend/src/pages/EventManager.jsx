@@ -358,14 +358,19 @@ export default function EventManager() {
             {/* Modal Header */}
             <div style={{ padding: '1.25rem', borderBottom: '1px solid var(--color-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div className="flex items-center gap-3">
-                <div style={{ width: 40, height: 40, borderRadius: '50%', overflow: 'hidden' }}>
-                  <img src={selectedCluster.sample_thumbnails[0]} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                <div style={{ width: 48, height: 48, borderRadius: '50%', overflow: 'hidden', border: '2px solid var(--color-border)', flexShrink: 0 }}>
+                  {selectedCluster.sample_thumbnails[0] ? (
+                    <img src={selectedCluster.sample_thumbnails[0]} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  ) : (
+                    <div style={{ width: '100%', height: '100%', background: 'var(--color-surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <Users size={20} color="var(--text-muted)" />
+                    </div>
+                  )}
                 </div>
                 <div>
                   <h3 style={{ margin: 0, fontSize: '1.1rem' }}>{selectedCluster.label || `Person ${selectedCluster.id.slice(0, 6)}`}</h3>
-                  <div className="text-xs text-muted">{selectedCluster.member_count} photos</div>
+                  <div className="text-xs text-muted">{selectedCluster.member_count} photos in this group</div>
                 </div>
-              </div>
               </div>
               <div className="flex items-center gap-2">
                 <button 
@@ -373,7 +378,7 @@ export default function EventManager() {
                   onClick={async () => {
                     const btn = document.getElementById('download-zip-btn');
                     const originalText = btn.innerHTML;
-                    btn.innerHTML = '<span style="display:flex;align-items:center;gap:4px"><svg class="lucide lucide-loader-2" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="animation: spin 1s linear infinite"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> Downloading...</span>';
+                    btn.innerHTML = '<span style="display:flex;align-items:center;gap:4px">⏳ Downloading...</span>';
                     btn.disabled = true;
                     try {
                       const response = await api.get(`/api/faces/events/${eventId}/clusters/${selectedCluster.id}/download`, { responseType: 'blob' });
@@ -384,9 +389,10 @@ export default function EventManager() {
                       document.body.appendChild(link);
                       link.click();
                       link.parentNode.removeChild(link);
+                      window.URL.revokeObjectURL(url);
                     } catch (e) {
                       console.error(e);
-                      alert('Failed to download zip');
+                      alert('Failed to download zip. Please try again.');
                     } finally {
                       btn.innerHTML = originalText;
                       btn.disabled = false;
@@ -400,8 +406,10 @@ export default function EventManager() {
                   <X size={20} />
                 </button>
               </div>
-            
+            </div>
+
             {/* Modal Body */}
+
             <div style={{ padding: '1.25rem', overflowY: 'auto', flex: 1 }}>
               {loadingClusterPhotos ? (
                 <div className="flex justify-center items-center py-8">
