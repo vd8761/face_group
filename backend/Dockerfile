@@ -19,6 +19,9 @@ RUN python -c "from insightface.app import FaceAnalysis; app = FaceAnalysis(name
 
 COPY . .
 
+COPY start.sh /start.sh
+RUN chmod +x /start.sh
+
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["/start.sh"]
