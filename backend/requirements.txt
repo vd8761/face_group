@@ -19,8 +19,8 @@ boto3==1.35.76
 Pillow==11.0.0
 
 # ML — Face Detection + Embedding
-# buffalo_sc model: ~85MB download, ~280MB RAM at runtime (fits 512MB free tier)
-# buffalo_l was replaced because it uses 1-2GB RAM (OOM on free tier)
+# buffalo_l model: ~500MB download, ~1.5GB RAM at runtime
+# Requires Render Standard plan (2GB RAM) or equivalent
 insightface==0.7.3
 onnxruntime==1.20.1
 numpy==1.26.4

@@ -1,14 +1,7 @@
 """
-ML pipeline service — face detection and embedding using InsightFace buffalo_sc.
-
-Model choice: buffalo_sc (small-compact)
-  - Download size: ~85 MB (vs buffalo_l at ~500 MB)
-  - Runtime RAM:   ~280 MB (vs buffalo_l at 1-2 GB)
-  - Fits Render free tier 512 MB limit ✅
-  - Accuracy: good enough for face grouping
-
-The model is lazy-loaded on first request and cached in /tmp/insightface_cache
-(writable on Render's ephemeral filesystem).
+ML pipeline service — face detection and embedding using InsightFace buffalo_l.
+Uses the buffalo_l model pack (RetinaFace detector + ArcFace embedder).
+Requires ~1.5GB RAM — use Render Standard plan (2GB) or equivalent.
 """
 import io
 import os
@@ -31,19 +24,18 @@ def _get_insightface_app():
     if _app is None:
         from insightface.app import FaceAnalysis
         _app = FaceAnalysis(
-            name="buffalo_sc",          # Small-compact: ~85MB, ~280MB RAM
+            name="buffalo_l",
             providers=["CPUExecutionProvider"],
-            allowed_modules=["detection", "recognition"],
         )
-        _app.prepare(ctx_id=0, det_size=(320, 320))  # 320x320 uses less RAM than 640x640
+        _app.prepare(ctx_id=0, det_size=(640, 640))
     return _app
 
 
 @dataclass
 class DetectedFace:
-    bbox: list           # [x1, y1, x2, y2]
+    bbox: list
     confidence: float
-    embedding: np.ndarray  # 512-dim float32
+    embedding: np.ndarray   # 512-dim float32
     quality_score: float
     is_low_quality: bool
 
@@ -52,21 +44,21 @@ def detect_and_embed(image_bytes: bytes) -> List[DetectedFace]:
     """
     Run face detection + embedding on raw image bytes.
     Returns a list of DetectedFace objects, one per detected face.
+    Faces below confidence or size thresholds are marked as low_quality.
     """
     import cv2
 
     app = _get_insightface_app()
 
-    # Downscale to max 1280px to limit memory usage during inference
     nparr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if img is None:
         raise ValueError("Could not decode image — unsupported format or corrupted file.")
 
+    # Limit image size to avoid excessive RAM during inference
     h, w = img.shape[:2]
-    max_dim = 1280
-    if max(h, w) > max_dim:
-        scale = max_dim / max(h, w)
+    if max(h, w) > 1920:
+        scale = 1920 / max(h, w)
         img = cv2.resize(img, (int(w * scale), int(h * scale)))
 
     faces = app.get(img)
@@ -108,7 +100,7 @@ def bytes_to_embedding(data: bytes) -> np.ndarray:
 
 
 def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-    """Cosine similarity between two L2-normalised embeddings."""
+    """Cosine similarity between two L2-normalised embeddings (range -1 to 1)."""
     return float(np.dot(a, b))
 
 

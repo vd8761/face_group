@@ -72,15 +72,14 @@ class Settings(BaseSettings):
         return v
 
     # ── ML Pipeline ───────────────────────────────────────────────────────────
-    # InsightFace buffalo_sc — small compact model (~85MB download, ~280MB RAM)
-    # buffalo_l was too large (1-2GB RAM) for Render free tier
-    FACE_DETECTION_THRESHOLD: float = 0.5        # Min det_score from InsightFace
-    FACE_MIN_SIZE: int = 30                       # Min face width/height in pixels
-    EMBEDDING_DIM: int = 512                     # buffalo_sc ArcFace output dimension
+    # InsightFace buffalo_l — best accuracy, requires 2GB RAM (Render Standard plan)
+    FACE_DETECTION_THRESHOLD: float = 0.7
+    FACE_MIN_SIZE: int = 40
+    EMBEDDING_DIM: int = 512                     # ArcFace 512-dim
 
     # ── HDBSCAN Clustering ────────────────────────────────────────────────────
     HDBSCAN_MIN_CLUSTER_SIZE: int = 2
-    COSINE_MATCH_THRESHOLD: float = 0.40          # < this distance = same person
+    COSINE_MATCH_THRESHOLD: float = 0.35          # < this = same person (lower = stricter)
 
     # ── File size limits ──────────────────────────────────────────────────────
     MAX_UPLOAD_SIZE_MB: int = 25                  # Per-photo max
