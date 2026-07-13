@@ -25,11 +25,12 @@ bearer_scheme = HTTPBearer()
 # Password helpers
 # ─────────────────────────────────────────────────────────────────────────────
 def hash_password(plain: str) -> str:
-    return pwd_context.hash(plain)
+    # Bcrypt natively only supports up to 72 bytes. Truncate to avoid ValueError.
+    return pwd_context.hash(plain[:72])
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
+    return pwd_context.verify(plain[:72], hashed)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
