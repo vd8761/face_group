@@ -1,12 +1,17 @@
 """
-ML pipeline service — face detection and embedding using face_recognition (dlib).
+ML pipeline service — face detection and embedding using InsightFace buffalo_sc.
 
-Why face_recognition instead of InsightFace:
-  - InsightFace (buffalo_l) requires ~1-2 GB RAM → OOM on Render free tier (512MB)
-  - face_recognition (dlib HOG) uses ~120 MB RAM → fits comfortably on free tier
-  - 128-dim embeddings are sufficient for face grouping/clustering
+Model choice: buffalo_sc (small-compact)
+  - Download size: ~85 MB (vs buffalo_l at ~500 MB)
+  - Runtime RAM:   ~280 MB (vs buffalo_l at 1-2 GB)
+  - Fits Render free tier 512 MB limit ✅
+  - Accuracy: good enough for face grouping
+
+The model is lazy-loaded on first request and cached in /tmp/insightface_cache
+(writable on Render's ephemeral filesystem).
 """
 import io
+import os
 import numpy as np
 from typing import List
 from dataclasses import dataclass
@@ -15,63 +20,76 @@ from ..config import get_settings
 
 settings = get_settings()
 
+# Set InsightFace cache to /tmp (always writable on Render)
+os.environ.setdefault("INSIGHTFACE_HOME", "/tmp/insightface_cache")
+
+_app = None
+
+
+def _get_insightface_app():
+    global _app
+    if _app is None:
+        from insightface.app import FaceAnalysis
+        _app = FaceAnalysis(
+            name="buffalo_sc",          # Small-compact: ~85MB, ~280MB RAM
+            providers=["CPUExecutionProvider"],
+            allowed_modules=["detection", "recognition"],
+        )
+        _app.prepare(ctx_id=0, det_size=(320, 320))  # 320x320 uses less RAM than 640x640
+    return _app
+
 
 @dataclass
 class DetectedFace:
     bbox: list           # [x1, y1, x2, y2]
-    confidence: float    # always 1.0 for dlib (binary detection)
-    embedding: np.ndarray  # 128-dim float64
+    confidence: float
+    embedding: np.ndarray  # 512-dim float32
     quality_score: float
     is_low_quality: bool
 
 
 def detect_and_embed(image_bytes: bytes) -> List[DetectedFace]:
     """
-    Run face detection + embedding on raw image bytes using face_recognition (dlib).
+    Run face detection + embedding on raw image bytes.
     Returns a list of DetectedFace objects, one per detected face.
     """
-    import face_recognition
+    import cv2
 
-    # Decode image via Pillow (avoids OpenCV dependency)
-    from PIL import Image
-    img_pil = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    app = _get_insightface_app()
 
-    # Downscale large images to prevent OOM during face detection
-    MAX_DIM = 1280
-    w, h = img_pil.size
-    if max(w, h) > MAX_DIM:
-        scale = MAX_DIM / max(w, h)
-        img_pil = img_pil.resize(
-            (int(w * scale), int(h * scale)),
-            Image.LANCZOS
-        )
+    # Downscale to max 1280px to limit memory usage during inference
+    nparr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("Could not decode image — unsupported format or corrupted file.")
 
-    img_array = np.array(img_pil)
+    h, w = img.shape[:2]
+    max_dim = 1280
+    if max(h, w) > max_dim:
+        scale = max_dim / max(h, w)
+        img = cv2.resize(img, (int(w * scale), int(h * scale)))
 
-    # Detect face locations (HOG model is CPU-friendly, ~80MB RAM)
-    locations = face_recognition.face_locations(img_array, model="hog")
-
-    if not locations:
-        return []
-
-    # Compute 128-dim embeddings for each face
-    encodings = face_recognition.face_encodings(img_array, locations)
-
+    faces = app.get(img)
     results: List[DetectedFace] = []
-    for (top, right, bottom, left), encoding in zip(locations, encodings):
-        w_face = right - left
-        h_face = bottom - top
-        face_size_ok = (w_face >= settings.FACE_MIN_SIZE and h_face >= settings.FACE_MIN_SIZE)
-        is_low_quality = not face_size_ok
 
-        # Quality score: normalised face area
+    for face in faces:
+        bbox = face.bbox.astype(int).tolist()
+        confidence = float(face.det_score)
+        embedding = face.normed_embedding
+
+        w_face = bbox[2] - bbox[0]
+        h_face = bbox[3] - bbox[1]
+        face_size_ok = (w_face >= settings.FACE_MIN_SIZE and h_face >= settings.FACE_MIN_SIZE)
+        confidence_ok = confidence >= settings.FACE_DETECTION_THRESHOLD
+        is_low_quality = not (face_size_ok and confidence_ok)
+
         size_score = min(1.0, min(w_face, h_face) / 200.0)
-        quality_score = float(size_score)
+        quality_score = float(np.sqrt(confidence * size_score))
 
         results.append(DetectedFace(
-            bbox=[left, top, right, bottom],  # [x1, y1, x2, y2]
-            confidence=1.0,                   # dlib gives binary yes/no
-            embedding=encoding,               # already L2-normalised
+            bbox=bbox,
+            confidence=confidence,
+            embedding=embedding,
             quality_score=quality_score,
             is_low_quality=is_low_quality,
         ))
@@ -80,22 +98,18 @@ def detect_and_embed(image_bytes: bytes) -> List[DetectedFace]:
 
 
 def embedding_to_bytes(embedding: np.ndarray) -> bytes:
-    """Serialise a float64 embedding numpy array to bytes for DB storage."""
-    return embedding.astype(np.float64).tobytes()
+    """Serialise a float32 embedding numpy array to bytes for DB storage."""
+    return embedding.astype(np.float32).tobytes()
 
 
 def bytes_to_embedding(data: bytes) -> np.ndarray:
-    """Deserialise bytes back to a float64 numpy array."""
-    return np.frombuffer(data, dtype=np.float64).copy()
+    """Deserialise bytes back to a float32 numpy array."""
+    return np.frombuffer(data, dtype=np.float32).copy()
 
 
 def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-    """Cosine similarity between two embeddings (range -1 to 1)."""
-    norm_a = np.linalg.norm(a)
-    norm_b = np.linalg.norm(b)
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-    return float(np.dot(a, b) / (norm_a * norm_b))
+    """Cosine similarity between two L2-normalised embeddings."""
+    return float(np.dot(a, b))
 
 
 def cosine_distance(a: np.ndarray, b: np.ndarray) -> float:
