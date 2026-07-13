@@ -175,12 +175,10 @@ export default function EventManager() {
           ))}
         </div>
 
-        {/* Upload tab */}
-        {activeTab === 'upload' && (
-          <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
-            <PhotoUpload eventId={eventId} onUploadComplete={() => { setTimeout(loadAll, 1000); }} />
-          </motion.div>
-        )}
+        {/* Upload tab — always mounted so switching tabs doesn't cancel ongoing uploads */}
+        <div style={{ display: activeTab === 'upload' ? 'block' : 'none' }}>
+          <PhotoUpload eventId={eventId} onUploadComplete={() => { setTimeout(loadAll, 1000); }} />
+        </div>
 
         {/* Photos tab */}
         {activeTab === 'photos' && (
