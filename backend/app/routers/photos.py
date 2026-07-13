@@ -64,6 +64,7 @@ async def upload_photos(
         )
 
     created_ids  = []
+    file_bytes_list = []
     total_bytes  = 0
     duplicates   = []   # files skipped because hash already exists
     skipped_fmt  = []   # files skipped due to bad format/size
@@ -116,11 +117,12 @@ async def upload_photos(
             filename=file.filename or f"{photo_id}.jpg",
             mime_type=file.content_type,
             content_hash=content_hash,          # ← store hash for future dedup
-            status=PhotoStatus.queued,
+            status=PhotoStatus.processing,
         )
         db.add(photo)
         total_bytes += len(data)
         created_ids.append(str(photo_id))
+        file_bytes_list.append(data)
 
     await db.flush()
 
@@ -138,14 +140,57 @@ async def upload_photos(
         payload={"count": len(created_ids)},
     ))
 
-    await db.commit()
+    # Process ML pipeline immediately (synchronously in threadpool)
+    # We do not use Celery anymore to prevent OOM and ensure immediate processing
+    from fastapi.concurrency import run_in_threadpool
+    from ..services.ml_pipeline import detect_and_embed, embedding_to_bytes
+    from ..services.clustering import assign_to_cluster, create_new_cluster
+    from ..models import FaceDetection
 
-    # Dispatch Celery tasks (one per photo)
-    for pid in created_ids:
-        process_photo.apply_async(
-            args=[pid, str(current_user.tenant_id), str(event_id)],
-            countdown=0,
-        )
+    for pid, data_bytes in zip(created_ids, file_bytes_list):
+        photo_uuid = uuid.UUID(pid)
+        try:
+            # 1. Detect faces
+            detected_faces = await run_in_threadpool(detect_and_embed, data_bytes)
+            
+            # 2. Store detections & assign clusters
+            for face in detected_faces:
+                detection = FaceDetection(
+                    photo_id=photo_uuid,
+                    bbox={"x1": face.bbox[0], "y1": face.bbox[1], "x2": face.bbox[2], "y2": face.bbox[3]},
+                    detection_confidence=face.confidence,
+                    quality_score=face.quality_score,
+                    embedding=embedding_to_bytes(face.embedding),
+                    is_low_quality=face.is_low_quality,
+                )
+                db.add(detection)
+                await db.flush()
+
+                if not face.is_low_quality:
+                    cluster_id = await assign_to_cluster(
+                        detection.id, face.embedding, event_id, db
+                    )
+                    if cluster_id is None:
+                        await create_new_cluster(
+                            detection.id, face.embedding, event_id, db
+                        )
+            
+            # 3. Mark as done
+            result = await db.execute(select(Photo).where(Photo.id == photo_uuid))
+            photo_obj = result.scalar_one()
+            photo_obj.status = PhotoStatus.done
+            await db.commit()
+            
+        except Exception as e:
+            await db.rollback()
+            # Update to failed on error
+            result = await db.execute(select(Photo).where(Photo.id == photo_uuid))
+            photo_obj = result.scalar_one_or_none()
+            if photo_obj:
+                photo_obj.status = PhotoStatus.failed
+                photo_obj.error_message = str(e)[:500]
+                await db.commit()
+
 
     return {
         "accepted":        len(created_ids),
