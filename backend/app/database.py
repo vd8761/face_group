@@ -42,6 +42,11 @@ async def get_db():
 
 
 async def init_db():
-    """Create all tables (dev/test only — use Alembic for production migrations)."""
+    """Create all tables and run safe schema migrations."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Safe migration: add content_hash column to photos if it doesn't exist yet
+        # (create_all doesn't modify existing tables)
+        await conn.execute(__import__('sqlalchemy').text(
+            "ALTER TABLE photos ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64)"
+        ))

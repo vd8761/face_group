@@ -10,10 +10,11 @@ const BATCH_SIZE = 5;
 
 export default function PhotoUpload({ eventId, onUploadComplete }) {
   const [dragOver, setDragOver]     = useState(false);
-  const [files, setFiles]           = useState([]);       // pending queue
+  const [files, setFiles]           = useState([]);
   const [uploading, setUploading]   = useState(false);
-  const [failedFiles, setFailedFiles] = useState([]);     // files that failed
-  const [uploadedCount, setUploadedCount] = useState(0);
+  const [failedFiles, setFailedFiles]     = useState([]);
+  const [duplicateNames, setDuplicateNames] = useState([]); // server-confirmed duplicates
+  const [uploadedCount, setUploadedCount]   = useState(0);
   const [progress, setProgress]     = useState({ batchDone: 0, batchTotal: 0 });
   const [done, setDone]             = useState(false);
   const inputRef = useRef(null);
@@ -28,12 +29,13 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
     });
     setDone(false);
     setFailedFiles([]);
+    setDuplicateNames([]);
   }, []);
 
   const removeFile = (idx) => setFiles(prev => prev.filter((_, i) => i !== idx));
   const removeFailedFile = (idx) => setFailedFiles(prev => prev.filter((_, i) => i !== idx));
 
-  /* ── core upload logic — works for both first-run and retry ── */
+  /* ── core upload logic ── */
   const runUpload = async (filesToUpload) => {
     setUploading(true);
     setDone(false);
@@ -43,9 +45,10 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
       batches.push(filesToUpload.slice(i, i + BATCH_SIZE));
     }
 
-    let accepted    = 0;
-    let newFailed   = [];
-    let batchesDone = 0;
+    let accepted       = 0;
+    let newFailed      = [];
+    let allDuplicates  = [];
+    let batchesDone    = 0;
 
     setProgress({ batchDone: 0, batchTotal: batches.length });
 
@@ -60,17 +63,14 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
           { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 120000 }
         );
 
-        accepted += data.accepted || 0;
-        // If the server skipped some (wrong type / too large) they count as failed
-        if ((data.skipped || 0) > 0) {
-          // We can't tell which individual ones were skipped without more detail
-          // so we add all of them to the retry queue conservatively only if accepted == 0
-          if ((data.accepted || 0) === 0) {
-            newFailed = [...newFailed, ...batch];
-          }
+        accepted       += data.accepted   || 0;
+        allDuplicates   = [...allDuplicates, ...(data.duplicate_names || [])];
+
+        // If entire batch was rejected (all duplicates or all format errors), don't fail it
+        if ((data.accepted || 0) === 0 && (data.duplicates || 0) === 0 && (data.skipped_format || 0) === 0) {
+          newFailed = [...newFailed, ...batch];
         }
       } catch {
-        // Entire batch failed — add all files to retry queue
         newFailed = [...newFailed, ...batch];
       }
 
@@ -80,6 +80,7 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
 
     setUploadedCount(prev => prev + accepted);
     setFailedFiles(newFailed);
+    setDuplicateNames(allDuplicates);
     setFiles([]);
     setUploading(false);
     setDone(true);
@@ -91,8 +92,9 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
   const handleRetry  = () => { if (failedFiles.length && !uploading) runUpload(failedFiles); };
 
   const reset = () => {
-    setFiles([]); setFailedFiles([]); setDone(false);
-    setUploadedCount(0); setProgress({ batchDone: 0, batchTotal: 0 });
+    setFiles([]); setFailedFiles([]); setDuplicateNames([]);
+    setDone(false); setUploadedCount(0);
+    setProgress({ batchDone: 0, batchTotal: 0 });
   };
 
   const pct = progress.batchTotal > 0
@@ -257,8 +259,56 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
                 </div>
               </div>
             )}
+            {/* Duplicate files panel */}
+            {duplicateNames.length > 0 && (
+              <div style={{
+                background: '#fff', border: '1px solid rgba(217,119,6,0.3)',
+                borderRadius: 'var(--radius-lg)', overflow: 'hidden',
+                marginBottom: failedFiles.length > 0 ? '0.875rem' : 0,
+              }}>
+                <div style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  padding: '0.875rem 1.125rem',
+                  background: 'rgba(217,119,6,0.06)',
+                  borderBottom: '1px solid rgba(217,119,6,0.15)',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span style={{ fontSize: '1rem' }}>⚠️</span>
+                    <span style={{ fontWeight: 700, fontSize: '0.875rem', color: '#92400e' }}>
+                      {duplicateNames.length} photo{duplicateNames.length !== 1 ? 's' : ''} already exist in this event
+                    </span>
+                  </div>
+                  <button className="btn btn-ghost btn-sm" onClick={() => setDuplicateNames([])}>
+                    <X size={12} /> Dismiss
+                  </button>
+                </div>
+                <div style={{ padding: '0.5rem 0', maxHeight: 180, overflowY: 'auto' }}>
+                  {duplicateNames.map((name, i) => (
+                    <div key={i} style={{
+                      display: 'flex', alignItems: 'center', gap: '0.625rem',
+                      padding: '0.5rem 1.125rem',
+                      background: i % 2 === 0 ? 'transparent' : 'rgba(217,119,6,0.02)',
+                    }}>
+                      <div style={{ width: 28, height: 28, borderRadius: '7px', background: 'rgba(217,119,6,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                        <span style={{ fontSize: '0.75rem' }}>🔁</span>
+                      </div>
+                      <span style={{ fontSize: '0.8375rem', color: '#92400e', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                        {name}
+                      </span>
+                      <span style={{ fontSize: '0.7rem', color: '#b45309', background: 'rgba(217,119,6,0.1)', padding: '0.1rem 0.5rem', borderRadius: '999px', whiteSpace: 'nowrap' }}>
+                        Already uploaded
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ padding: '0.625rem 1.125rem', borderTop: '1px solid rgba(217,119,6,0.12)', background: 'rgba(217,119,6,0.03)' }}>
+                  <p style={{ fontSize: '0.75rem', color: '#92400e' }}>
+                    💡 Detected using SHA-256 file hash — same file content, even if renamed
+                  </p>
+                </div>
+              </div>
+            )}
 
-            {/* Failed files panel */}
             {failedFiles.length > 0 && (
               <div style={{
                 background: '#fff', border: '1px solid rgba(239,68,68,0.25)',

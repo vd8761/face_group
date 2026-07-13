@@ -2,6 +2,7 @@
 Photos router — bulk upload, listing with status, and signed URL serving.
 """
 import uuid
+import hashlib
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
@@ -62,17 +63,37 @@ async def upload_photos(
                    f"Already have {current_count}.",
         )
 
-    created_ids = []
-    total_bytes = 0
+    created_ids  = []
+    total_bytes  = 0
+    duplicates   = []   # files skipped because hash already exists
+    skipped_fmt  = []   # files skipped due to bad format/size
 
     for file in files:
-        # Validate
+        # Validate type
         if file.content_type not in settings.ALLOWED_IMAGE_TYPES:
-            continue  # Skip unsupported types silently; client handles validation
+            skipped_fmt.append(file.filename)
+            continue
 
         data = await file.read()
+
+        # Validate size
         if len(data) > settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024:
+            skipped_fmt.append(file.filename)
             continue
+
+        # ── SHA-256 duplicate check ──────────────────────────────────────────
+        content_hash = hashlib.sha256(data).hexdigest()
+
+        existing = await db.execute(
+            select(Photo).where(
+                Photo.event_id == event_id,
+                Photo.content_hash == content_hash,
+            )
+        )
+        if existing.scalar_one_or_none():
+            duplicates.append(file.filename)
+            continue   # Skip — exact same file already in this event
+        # ────────────────────────────────────────────────────────────────────
 
         photo_id = uuid.uuid4()
 
@@ -94,6 +115,7 @@ async def upload_photos(
             original_size_bytes=len(data),
             filename=file.filename or f"{photo_id}.jpg",
             mime_type=file.content_type,
+            content_hash=content_hash,          # ← store hash for future dedup
             status=PhotoStatus.queued,
         )
         db.add(photo)
@@ -126,9 +148,11 @@ async def upload_photos(
         )
 
     return {
-        "accepted": len(created_ids),
-        "skipped": len(files) - len(created_ids),
-        "photo_ids": created_ids,
+        "accepted":        len(created_ids),
+        "skipped_format":  len(skipped_fmt),
+        "duplicates":      len(duplicates),
+        "duplicate_names": duplicates,          # filenames that were exact duplicates
+        "photo_ids":       created_ids,
     }
 
 

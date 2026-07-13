@@ -135,6 +135,8 @@ class Photo(Base):
     original_size_bytes: Mapped[int] = mapped_column(Integer, default=0)
     filename: Mapped[str]     = mapped_column(String(255))
     mime_type: Mapped[str]    = mapped_column(String(50))
+    # SHA-256 hex digest of the raw file bytes — used for duplicate detection within an event
+    content_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     status: Mapped[PhotoStatus] = mapped_column(SAEnum(PhotoStatus), default=PhotoStatus.queued)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -144,6 +146,7 @@ class Photo(Base):
 
     __table_args__ = (
         Index("ix_photos_event_status", "event_id", "status"),
+        Index("ix_photos_event_hash",   "event_id", "content_hash"),
     )
 
 
