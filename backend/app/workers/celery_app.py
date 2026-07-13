@@ -2,6 +2,7 @@
 Celery application configuration — uses Upstash Redis as broker and backend.
 """
 from celery import Celery
+import ssl
 from ..config import get_settings
 
 settings = get_settings()
@@ -13,7 +14,12 @@ celery_app = Celery(
     include=["app.workers.tasks"],
 )
 
+# Configure SSL for Upstash rediss://
+ssl_conf = {"ssl_cert_reqs": ssl.CERT_NONE} if settings.REDIS_URL and settings.REDIS_URL.startswith("rediss://") else None
+
 celery_app.conf.update(
+    broker_use_ssl=ssl_conf,
+    redis_backend_use_ssl=ssl_conf,
     task_serializer="json",
     accept_content=["json"],
     result_serializer="json",

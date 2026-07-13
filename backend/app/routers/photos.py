@@ -113,7 +113,7 @@ async def upload_photos(
         action="photo.upload",
         resource_type="event",
         resource_id=str(event_id),
-        metadata={"count": len(created_ids)},
+        payload={"count": len(created_ids)},
     ))
 
     await db.commit()

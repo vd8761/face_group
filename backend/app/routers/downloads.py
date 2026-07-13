@@ -51,7 +51,7 @@ async def download_zip(
         action="photo.zip_download",
         resource_type="photo_set",
         resource_id=None,
-        metadata={"photo_count": len(photos)},
+        payload={"photo_count": len(photos)},
     ))
     await db.commit()
 

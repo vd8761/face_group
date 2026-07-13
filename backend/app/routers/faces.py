@@ -120,7 +120,7 @@ async def selfie_scan(
         action="selfie.scan",
         resource_type="event",
         resource_id=str(event_id),
-        metadata={"matched": matched_cluster_id is not None, "confidence": round(1.0 - distance, 4)},
+        payload={"matched": matched_cluster_id is not None, "confidence": round(1.0 - distance, 4)},
     ))
 
     await db.flush()

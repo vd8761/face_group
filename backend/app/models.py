@@ -240,7 +240,7 @@ class AuditLog(Base):
     resource_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     resource_id: Mapped[Optional[str]]   = mapped_column(String(100), nullable=True)
     ip_address: Mapped[Optional[str]]    = mapped_column(String(45), nullable=True)
-    metadata: Mapped[Optional[dict]]     = mapped_column(JSON, nullable=True)
+    payload: Mapped[Optional[dict]]     = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     user: Mapped[Optional["User"]] = relationship(back_populates="audit_logs")
