@@ -5,10 +5,10 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import bcrypt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -17,7 +17,6 @@ from .database import get_db
 from .models import User, UserRole, Tenant, Subscription, SubscriptionStatus
 
 settings = get_settings()
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 bearer_scheme = HTTPBearer()
 
 
@@ -25,12 +24,12 @@ bearer_scheme = HTTPBearer()
 # Password helpers
 # ─────────────────────────────────────────────────────────────────────────────
 def hash_password(plain: str) -> str:
-    # Bcrypt natively only supports up to 72 bytes. Truncate to avoid ValueError.
-    return pwd_context.hash(plain[:72])
+    # bcrypt max is 72 bytes; encode to bytes before hashing
+    return bcrypt.hashpw(plain[:72].encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain[:72], hashed)
+    return bcrypt.checkpw(plain[:72].encode("utf-8"), hashed.encode("utf-8"))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
