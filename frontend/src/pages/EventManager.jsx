@@ -3,7 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
   ArrowLeft, Upload, Users, Image, RefreshCw, Merge, Loader2,
-  CheckCircle2, AlertCircle, Clock, AlertTriangle, Key, Share2, X
+  CheckCircle2, AlertCircle, Clock, AlertTriangle, Key, Share2, X, Download
 } from 'lucide-react';
 import api from '../api/client';
 import PhotoUpload from '../components/PhotoUpload';
@@ -302,38 +302,35 @@ export default function EventManager() {
                 <p className="text-secondary">No face groups yet — upload and process photos first.</p>
               </div>
             ) : (
-              <div className="grid-3" style={{ gap: '1rem' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '1.5rem' }}>
                 {clusters.map((cluster) => (
                   <div
                     key={cluster.id}
                     className={`cluster-card ${isMergeMode ? 'merge-mode' : ''}`}
                     style={{ 
                       cursor: 'pointer', 
-                      outline: mergeIds.includes(cluster.id) ? '2px solid var(--accent-light)' : 'none', 
+                      display: 'flex', flexDirection: 'column',
+                      outline: mergeIds.includes(cluster.id) ? '3px solid var(--accent-light)' : 'none', 
                       outlineOffset: '2px',
+                      borderRadius: 'var(--radius-lg)',
                       opacity: (isMergeMode && mergeIds.length === 2 && !mergeIds.includes(cluster.id)) ? 0.5 : 1
                     }}
                     onClick={() => handleClusterClick(cluster)}
                   >
                     {cluster.sample_thumbnails.length > 0 ? (
-                      <div className="cluster-faces">
-                        {[...Array(3)].map((_, i) => (
-                          <img key={i} src={cluster.sample_thumbnails[i] || cluster.sample_thumbnails[0]} alt="" style={{ width: '100%', aspectRatio: '1', objectFit: 'cover' }} />
-                        ))}
+                      <div style={{ aspectRatio: '1', borderRadius: 'var(--radius-lg)', overflow: 'hidden', backgroundColor: 'var(--color-surface-2)' }}>
+                        <img src={cluster.sample_thumbnails[0]} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                       </div>
                     ) : (
-                      <div style={{ height: 100, background: 'var(--color-surface-3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <div style={{ aspectRatio: '1', borderRadius: 'var(--radius-lg)', background: 'var(--color-surface-3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                         <Users size={32} color="var(--text-muted)" />
                       </div>
                     )}
-                    <div style={{ padding: '0.875rem' }}>
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-semibold">{cluster.label || `Person ${cluster.id.slice(0, 6)}`}</span>
-                        <span className="badge badge-active">{cluster.member_count} photos</span>
+                    <div style={{ padding: '0.75rem 0.25rem 0', textAlign: 'center' }}>
+                      <div className="text-sm font-semibold truncate" title={cluster.label || `Person ${cluster.id.slice(0, 6)}`}>
+                        {cluster.label || `Person ${cluster.id.slice(0, 6)}`}
                       </div>
-                      {mergeIds.includes(cluster.id) && (
-                        <div className="text-xs text-accent mt-1">✓ Selected for merge</div>
-                      )}
+                      <div className="text-xs text-muted mt-1">{cluster.member_count} photos</div>
                     </div>
                   </div>
                 ))}
@@ -369,10 +366,40 @@ export default function EventManager() {
                   <div className="text-xs text-muted">{selectedCluster.member_count} photos</div>
                 </div>
               </div>
-              <button className="btn btn-ghost btn-sm" onClick={() => setSelectedCluster(null)}>
-                <X size={20} />
-              </button>
-            </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button 
+                  className="btn btn-outline btn-sm"
+                  onClick={async () => {
+                    const btn = document.getElementById('download-zip-btn');
+                    const originalText = btn.innerHTML;
+                    btn.innerHTML = '<span style="display:flex;align-items:center;gap:4px"><svg class="lucide lucide-loader-2" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="animation: spin 1s linear infinite"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> Downloading...</span>';
+                    btn.disabled = true;
+                    try {
+                      const response = await api.get(`/api/faces/events/${eventId}/clusters/${selectedCluster.id}/download`, { responseType: 'blob' });
+                      const url = window.URL.createObjectURL(new Blob([response.data]));
+                      const link = document.createElement('a');
+                      link.href = url;
+                      link.setAttribute('download', `${selectedCluster.label || 'Person_' + selectedCluster.id.slice(0,6)}.zip`);
+                      document.body.appendChild(link);
+                      link.click();
+                      link.parentNode.removeChild(link);
+                    } catch (e) {
+                      console.error(e);
+                      alert('Failed to download zip');
+                    } finally {
+                      btn.innerHTML = originalText;
+                      btn.disabled = false;
+                    }
+                  }}
+                  id="download-zip-btn"
+                >
+                  <Download size={14} /> Download ZIP
+                </button>
+                <button className="btn btn-ghost btn-sm" onClick={() => setSelectedCluster(null)}>
+                  <X size={20} />
+                </button>
+              </div>
             
             {/* Modal Body */}
             <div style={{ padding: '1.25rem', overflowY: 'auto', flex: 1 }}>

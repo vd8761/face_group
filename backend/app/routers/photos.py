@@ -477,7 +477,7 @@ async def _process_drive_import(
                             # Upload face crop to R2
                             face_key = await upload_face_crop(
                                 face.face_crop_bytes,
-                                event.tenant_id,
+                                tenant_id,
                                 event_id,
                                 detection.id
                             )

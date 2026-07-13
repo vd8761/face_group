@@ -5,8 +5,12 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+import io
+import zipfile
+import httpx
 
 from ..database import get_db
 from ..models import (
@@ -258,8 +262,18 @@ async def get_cluster_photos(
     if not photo_ids:
         return []
 
+    # SQLAlchemy SQLite workaround for UUIDs in IN clause
     photo_result = await db.execute(select(Photo).where(Photo.id.in_(photo_ids)))
     photos = photo_result.scalars().all()
+    
+    # Fallback if the IN clause didn't work (SQLite UUID issue)
+    if not photos:
+        photos = []
+        for pid in photo_ids:
+            pr = await db.execute(select(Photo).where(Photo.id == pid))
+            p = pr.scalar_one_or_none()
+            if p:
+                photos.append(p)
 
     photo_responses = [
         PhotoResponse(
@@ -273,6 +287,64 @@ async def get_cluster_photos(
         for p in photos
     ]
     return photo_responses
+
+
+@router.get("/events/{event_id}/clusters/{cluster_id}/download")
+async def download_cluster_photos_zip(
+    event_id: uuid.UUID,
+    cluster_id: uuid.UUID,
+    current_user: User = Depends(require_organizer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate and stream a ZIP file containing all photos for this cluster."""
+    det_result = await db.execute(
+        select(FaceDetection).where(FaceDetection.cluster_id == cluster_id)
+    )
+    detections = det_result.scalars().all()
+    photo_ids = list({d.photo_id for d in detections})
+    
+    if not photo_ids:
+        raise HTTPException(status_code=404, detail="No photos found for this cluster.")
+
+    photos = []
+    for pid in photo_ids:
+        pr = await db.execute(select(Photo).where(Photo.id == pid))
+        p = pr.scalar_one_or_none()
+        if p and p.original_key:
+            photos.append(p)
+
+    if not photos:
+        raise HTTPException(status_code=404, detail="No original photos found.")
+
+    cluster_res = await db.execute(select(FaceCluster).where(FaceCluster.id == cluster_id))
+    cluster = cluster_res.scalar_one_or_none()
+    cluster_name = cluster.label if cluster and cluster.label else f"Person_{str(cluster_id)[:8]}"
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
+        async with httpx.AsyncClient() as client:
+            for i, p in enumerate(photos):
+                url = generate_presigned_url(p.original_key, expires_in=3600)
+                if not url:
+                    continue
+                try:
+                    resp = await client.get(url)
+                    if resp.status_code == 200:
+                        # try to keep original extension if possible
+                        ext = p.filename.split('.')[-1] if '.' in p.filename else 'jpg'
+                        filename = f"photo_{i+1}.{ext}"
+                        zip_file.writestr(filename, resp.content)
+                except Exception as e:
+                    print(f"Failed to download photo for zip: {e}")
+                    pass
+
+    zip_buffer.seek(0)
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={cluster_name}.zip"}
+    )
+
 
 
 @router.post("/clusters/merge", response_model=MessageResponse)

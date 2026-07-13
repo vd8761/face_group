@@ -187,7 +187,7 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
 
       {/* ── Mode switcher tabs ── */}
-      <div style={{ display: 'flex', gap: '0.5rem', borderBottom: '1px solid var(--color-border)', paddingBottom: '0' }}>
+      <div style={{ display: 'flex', gap: '0.5rem', background: 'var(--color-surface-2)', padding: '0.25rem', borderRadius: 'var(--radius-lg)', width: 'fit-content', margin: '0 0 1rem 0' }}>
         {[
           { id: 'local', icon: <Upload size={14}/>, label: 'Upload from Device' },
           { id: 'drive', icon: <HardDriveDownload size={14}/>, label: 'Import from Google Drive' },
@@ -198,15 +198,15 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
             style={{
               display: 'flex', alignItems: 'center', gap: '0.4rem',
               padding: '0.55rem 1rem',
-              background: 'none',
+              background: uploadMode === tab.id ? 'var(--color-surface)' : 'transparent',
               border: 'none',
-              borderBottom: uploadMode === tab.id ? '2px solid var(--accent)' : '2px solid transparent',
-              color: uploadMode === tab.id ? 'var(--accent)' : 'var(--color-muted)',
+              borderRadius: 'var(--radius-md)',
+              boxShadow: uploadMode === tab.id ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+              color: uploadMode === tab.id ? 'var(--color-text)' : 'var(--color-muted)',
               fontWeight: uploadMode === tab.id ? 600 : 400,
               fontSize: '0.85rem',
               cursor: 'pointer',
               transition: 'all 0.2s',
-              marginBottom: '-1px',
             }}
           >{tab.icon}{tab.label}</button>
         ))}
