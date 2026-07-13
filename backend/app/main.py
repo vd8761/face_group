@@ -13,7 +13,7 @@ from .config import get_settings
 from .database import init_db, AsyncSessionLocal
 from .models import User, UserRole, AuditLog
 from .auth import hash_password
-from .routers import auth, admin, events, photos, faces, downloads
+from .routers import auth, admin, events, photos, faces, downloads, public
 
 settings = get_settings()
 
@@ -82,6 +82,7 @@ app.include_router(events.router,    prefix="/api")
 app.include_router(photos.router,    prefix="/api")
 app.include_router(faces.router,     prefix="/api")
 app.include_router(downloads.router, prefix="/api")
+app.include_router(public.router,    prefix="/api")
 
 
 # ── Health check ─────────────────────────────────────────────────────────────
