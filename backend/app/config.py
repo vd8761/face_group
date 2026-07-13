@@ -3,6 +3,7 @@ Application configuration — reads from environment variables.
 All secrets must be set in .env (locally) or Render environment variables (production).
 """
 from pydantic_settings import BaseSettings
+from pydantic import field_validator
 from functools import lru_cache
 from typing import Optional
 
@@ -23,6 +24,19 @@ class Settings(BaseSettings):
     # ── Neon DB ───────────────────────────────────────────────────────────────
     DATABASE_URL: str  # postgresql+asyncpg://user:pass@host/dbname
 
+    @field_validator("DATABASE_URL", mode="after")
+    @classmethod
+    def fix_database_url(cls, v: str) -> str:
+        if not v:
+            raise ValueError("DATABASE_URL cannot be empty")
+        # Handle Heroku/legacy style postgres:// -> postgresql://
+        if v.startswith("postgres://"):
+            v = v.replace("postgres://", "postgresql://", 1)
+        # Ensure asyncpg driver is used
+        if v.startswith("postgresql://"):
+            v = v.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return v
+
     # ── Cloudflare R2 (S3-compatible) ─────────────────────────────────────────
     R2_ACCOUNT_ID: str
     R2_ACCESS_KEY_ID: str
@@ -32,6 +46,13 @@ class Settings(BaseSettings):
 
     # ── Upstash Redis (Celery broker + result backend) ────────────────────────
     REDIS_URL: str  # rediss://default:token@host:6380
+
+    @field_validator("REDIS_URL", mode="after")
+    @classmethod
+    def check_redis_url(cls, v: str) -> str:
+        if not v or v.strip() == "":
+            raise ValueError("REDIS_URL cannot be empty. Please set it in your environment variables.")
+        return v
 
     # ── ML Pipeline ───────────────────────────────────────────────────────────
     INSIGHTFACE_MODEL: str = "buffalo_l"          # RetinaFace + ArcFace
