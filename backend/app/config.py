@@ -35,6 +35,11 @@ class Settings(BaseSettings):
         # Ensure asyncpg driver is used
         if v.startswith("postgresql://"):
             v = v.replace("postgresql://", "postgresql+asyncpg://", 1)
+        # asyncpg uses 'ssl' instead of 'sslmode' in the query string
+        if "?sslmode=" in v:
+            v = v.replace("?sslmode=", "?ssl=")
+        if "&sslmode=" in v:
+            v = v.replace("&sslmode=", "&ssl=")
         return v
 
     # ── Cloudflare R2 (S3-compatible) ─────────────────────────────────────────
