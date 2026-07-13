@@ -262,11 +262,24 @@ async def clear_event_photos(
     if status_filter != "all":
         query = query.where(Photo.status == status_filter)
 
+    from ..services.storage import delete_objects
+    from fastapi.concurrency import run_in_threadpool
+
     result = await db.execute(query)
     photos = result.scalars().all()
 
+    keys_to_delete = []
     for p in photos:
+        if p.original_key:
+            keys_to_delete.append(p.original_key)
+        if p.thumbnail_key:
+            keys_to_delete.append(p.thumbnail_key)
         await db.delete(p)
+    
+    if keys_to_delete:
+        # Boto3 delete_objects takes max 1000 keys per request
+        for i in range(0, len(keys_to_delete), 1000):
+            await run_in_threadpool(delete_objects, keys_to_delete[i:i+1000])
     
     # Also delete face clusters if we are clearing all photos
     if status_filter == "all":
