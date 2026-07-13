@@ -35,11 +35,23 @@ class Settings(BaseSettings):
         # Ensure asyncpg driver is used
         if v.startswith("postgresql://"):
             v = v.replace("postgresql://", "postgresql+asyncpg://", 1)
-        # asyncpg uses 'ssl' instead of 'sslmode' in the query string
-        if "?sslmode=" in v:
-            v = v.replace("?sslmode=", "?ssl=")
-        if "&sslmode=" in v:
-            v = v.replace("&sslmode=", "&ssl=")
+
+        # Parse query string and remove unsupported arguments for asyncpg
+        from urllib.parse import urlparse, urlencode, parse_qsl, urlunparse
+        parsed = urlparse(v)
+        if parsed.query:
+            q_dict = dict(parse_qsl(parsed.query))
+            # Rename sslmode to ssl
+            if "sslmode" in q_dict:
+                q_dict["ssl"] = q_dict.pop("sslmode")
+            # Remove unsupported arguments
+            q_dict.pop("channel_binding", None)
+            
+            # Reconstruct URL
+            new_query = urlencode(q_dict)
+            parsed = parsed._replace(query=new_query)
+            v = urlunparse(parsed)
+
         return v
 
     # ── Cloudflare R2 (S3-compatible) ─────────────────────────────────────────
