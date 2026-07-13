@@ -1,0 +1,70 @@
+services:
+  # ── FastAPI Web Service ────────────────────────────────────────────────────
+  - type: web
+    name: photogroup-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: starter            # Free tier on Render
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: SUPER_ADMIN_EMAIL
+        value: admin@photogroup.app
+      - key: SUPER_ADMIN_PASSWORD
+        sync: false          # Set manually in Render dashboard
+      - key: DATABASE_URL
+        sync: false          # Paste your Neon DB connection string
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET_NAME
+        value: photogroup-photos
+      - key: REDIS_URL
+        sync: false          # Paste your Upstash Redis URL
+      - key: CORS_ORIGINS
+        value: '["https://your-app.vercel.app"]'
+      - key: DEBUG
+        value: "false"
+    healthCheckPath: /api/health
+
+  # ── Celery Background Worker ───────────────────────────────────────────────
+  - type: worker
+    name: photogroup-worker
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: starter
+    startCommand: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+    envVars:
+      - fromService:
+          name: photogroup-api
+          type: web
+          envVarKey: SECRET_KEY
+      - fromService:
+          name: photogroup-api
+          type: web
+          envVarKey: DATABASE_URL
+      - fromService:
+          name: photogroup-api
+          type: web
+          envVarKey: R2_ACCOUNT_ID
+      - fromService:
+          name: photogroup-api
+          type: web
+          envVarKey: R2_ACCESS_KEY_ID
+      - fromService:
+          name: photogroup-api
+          type: web
+          envVarKey: R2_SECRET_ACCESS_KEY
+      - fromService:
+          name: photogroup-api
+          type: web
+          envVarKey: R2_BUCKET_NAME
+      - fromService:
+          name: photogroup-api
+          type: web
+          envVarKey: REDIS_URL

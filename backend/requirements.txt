@@ -1,0 +1,40 @@
+# Core framework
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+pydantic==2.10.3
+pydantic-settings==2.6.1
+pydantic[email]
+
+# Database
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0               # Async PostgreSQL driver for Neon DB
+alembic==1.14.0
+
+# Auth
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# Storage (Cloudflare R2 — S3-compatible)
+boto3==1.35.76
+Pillow==11.0.0                 # Thumbnail generation
+
+# ML — Face Detection + Embedding
+# NOTE: Render uses Python 3.11 — insightface requires Python >= 3.9
+insightface==0.7.3
+onnxruntime==1.20.1            # CPU inference (GPU: onnxruntime-gpu)
+numpy==1.26.4
+opencv-python-headless==4.10.0.84  # Image decode (headless = no GUI deps)
+
+# Clustering
+hdbscan==0.8.38
+
+# Background workers
+celery[redis]==5.4.0
+redis==5.2.0
+
+# HTTP utilities
+python-multipart==0.0.17      # File upload support
+httpx==0.28.1
+
+# Observability (optional but recommended for Render)
+sentry-sdk[fastapi]==2.19.0
