@@ -1,8 +1,14 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { motion } from 'framer-motion';
-import { Camera, Mail, Lock, Eye, EyeOff, AlertCircle, Loader2 } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Mail, Lock, Eye, EyeOff, AlertCircle, Loader2, ArrowRight, Camera, Shield, Zap } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+
+const floatingFeatures = [
+  { icon: Camera, text: 'AI Face Grouping', sub: 'Powered by InsightFace' },
+  { icon: Shield, text: 'Privacy First',    sub: 'GDPR & DPDP Compliant' },
+  { icon: Zap,    text: 'Instant Results',  sub: 'Face match in < 3s' },
+];
 
 export default function Login() {
   const { login } = useAuth();
@@ -11,6 +17,7 @@ export default function Login() {
   const [showPwd, setShowPwd] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [focused, setFocused] = useState('');
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -29,55 +36,144 @@ export default function Login() {
   };
 
   return (
-    <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem 1.5rem', minHeight: '80vh' }}>
+    <div style={{
+      flex: 1, display: 'flex', minHeight: '100vh',
+      background: 'var(--color-bg)',
+    }}>
+      {/* ── Left panel — branding ── */}
       <motion.div
-        style={{ width: '100%', maxWidth: 440 }}
-        initial={{ opacity: 0, y: 24 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5 }}
+        initial={{ opacity: 0, x: -30 }}
+        animate={{ opacity: 1, x: 0 }}
+        transition={{ duration: 0.6 }}
+        style={{
+          flex: '0 0 45%', display: 'flex', flexDirection: 'column',
+          justifyContent: 'center', padding: '3rem 4rem',
+          background: 'linear-gradient(145deg, #1e0a3c 0%, #3b1278 55%, #6d28d9 100%)',
+          position: 'relative', overflow: 'hidden',
+        }}
+        className="login-left-panel"
       >
-        {/* Header */}
-        <div className="text-center mb-8">
-          <div style={{
-            width: 56, height: 56,
-            background: 'linear-gradient(135deg, var(--accent), var(--accent-light))',
-            borderRadius: '16px',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            margin: '0 auto 1.25rem',
-            boxShadow: '0 8px 32px var(--accent-glow)',
-          }}>
-            <Camera size={26} color="#fff" strokeWidth={2.5} />
-          </div>
-          <h1 style={{ fontSize: '1.75rem', marginBottom: '0.5rem' }}>Welcome back</h1>
-          <p className="text-secondary">Sign in to PhotoGroup</p>
+        {/* Decorative orbs */}
+        <div style={{
+          position: 'absolute', width: 400, height: 400, borderRadius: '50%',
+          background: 'radial-gradient(circle, rgba(236,72,153,0.25) 0%, transparent 70%)',
+          top: -100, right: -100, pointerEvents: 'none',
+        }} />
+        <div style={{
+          position: 'absolute', width: 300, height: 300, borderRadius: '50%',
+          background: 'radial-gradient(circle, rgba(124,58,237,0.3) 0%, transparent 70%)',
+          bottom: -80, left: -80, pointerEvents: 'none',
+        }} />
+
+        {/* Logo */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '3.5rem', position: 'relative', zIndex: 1 }}>
+          <svg width="40" height="40" viewBox="0 0 34 34" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect width="34" height="34" rx="9" fill="rgba(255,255,255,0.15)" />
+            <rect width="34" height="34" rx="9" stroke="rgba(255,255,255,0.3)" strokeWidth="1" />
+            <circle cx="17" cy="17" r="9" stroke="white" strokeWidth="1.5" fill="none" strokeDasharray="3 1.5"/>
+            <circle cx="17" cy="15" r="4" stroke="white" strokeWidth="1.5" fill="none"/>
+            <path d="M10.5 24.5 C10.5 21 13.5 19 17 19 C20.5 19 23.5 21 23.5 24.5" stroke="white" strokeWidth="1.5" strokeLinecap="round" fill="none"/>
+          </svg>
+          <span style={{ fontSize: '1.5rem', fontWeight: 800, color: '#fff', letterSpacing: '-0.02em' }}>Urface</span>
         </div>
 
-        {/* Card */}
-        <div className="card" style={{ padding: '2rem' }}>
-          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-            {/* Error */}
+        {/* Headline */}
+        <div style={{ position: 'relative', zIndex: 1, marginBottom: '3rem' }}>
+          <h2 style={{
+            color: '#fff', fontSize: 'clamp(1.75rem, 3vw, 2.5rem)',
+            lineHeight: 1.2, marginBottom: '1rem', fontWeight: 800,
+          }}>
+            Organizer<br />
+            <span style={{ background: 'linear-gradient(90deg,#f9a8d4,#c4b5fd)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>
+              Command Centre
+            </span>
+          </h2>
+          <p style={{ color: 'rgba(255,255,255,0.6)', fontSize: '1rem', lineHeight: 1.6, maxWidth: 320 }}>
+            Upload event photos, manage clusters, and share access codes — all in one place.
+          </p>
+        </div>
+
+        {/* Feature chips */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem', position: 'relative', zIndex: 1 }}>
+          {floatingFeatures.map(({ icon: Icon, text, sub }, i) => (
+            <motion.div
+              key={text}
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: 0.3 + i * 0.12 }}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '0.875rem',
+                background: 'rgba(255,255,255,0.07)',
+                border: '1px solid rgba(255,255,255,0.12)',
+                borderRadius: '14px', padding: '0.875rem 1.125rem',
+                backdropFilter: 'blur(8px)',
+              }}
+            >
+              <div style={{ width: 38, height: 38, borderRadius: '10px', background: 'rgba(255,255,255,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <Icon size={17} color="rgba(255,255,255,0.9)" />
+              </div>
+              <div>
+                <div style={{ color: '#fff', fontSize: '0.875rem', fontWeight: 600 }}>{text}</div>
+                <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.75rem' }}>{sub}</div>
+              </div>
+            </motion.div>
+          ))}
+        </div>
+      </motion.div>
+
+      {/* ── Right panel — form ── */}
+      <div style={{
+        flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: '2rem 1.5rem',
+      }}>
+        <motion.div
+          style={{ width: '100%', maxWidth: 420 }}
+          initial={{ opacity: 0, y: 24 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, delay: 0.15 }}
+        >
+          {/* Greeting */}
+          <div style={{ marginBottom: '2.5rem' }}>
+            <h1 style={{ fontSize: '2rem', marginBottom: '0.5rem', fontWeight: 800 }}>Welcome back 👋</h1>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.95rem' }}>
+              Sign in to manage your events and photos
+            </p>
+          </div>
+
+          {/* Error */}
+          <AnimatePresence>
             {error && (
               <motion.div
-                initial={{ opacity: 0, y: -8 }}
-                animate={{ opacity: 1, y: 0 }}
+                initial={{ opacity: 0, y: -8, height: 0 }}
+                animate={{ opacity: 1, y: 0, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
                 style={{
                   display: 'flex', alignItems: 'center', gap: '0.625rem',
-                  padding: '0.75rem 1rem',
+                  padding: '0.875rem 1rem', marginBottom: '1.25rem',
                   background: 'rgba(239,68,68,0.08)',
-                  border: '1px solid rgba(239,68,68,0.2)',
+                  border: '1px solid rgba(239,68,68,0.25)',
                   borderRadius: 'var(--radius-md)',
                 }}
               >
                 <AlertCircle size={16} color="var(--error)" />
-                <span className="text-sm" style={{ color: 'var(--error)' }}>{error}</span>
+                <span style={{ fontSize: '0.875rem', color: 'var(--error)', fontWeight: 500 }}>{error}</span>
               </motion.div>
             )}
+          </AnimatePresence>
 
+          {/* Form */}
+          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.125rem' }}>
             {/* Email */}
             <div className="input-group">
-              <label className="input-label">Email address</label>
+              <label className="input-label" style={{ fontWeight: 600, fontSize: '0.8rem', letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+                Email address
+              </label>
               <div style={{ position: 'relative' }}>
-                <Mail size={16} color="var(--text-muted)" style={{ position: 'absolute', left: '0.875rem', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
+                <Mail
+                  size={15}
+                  color={focused === 'email' ? 'var(--accent)' : 'var(--text-muted)'}
+                  style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', transition: 'color 0.2s' }}
+                />
                 <input
                   className="input"
                   type="email"
@@ -85,55 +181,104 @@ export default function Login() {
                   placeholder="you@example.com"
                   value={form.email}
                   onChange={e => setForm(p => ({ ...p, email: e.target.value }))}
-                  style={{ paddingLeft: '2.5rem' }}
+                  onFocus={() => setFocused('email')}
+                  onBlur={() => setFocused('')}
+                  style={{ paddingLeft: '2.75rem', height: '52px', fontSize: '0.9375rem' }}
                 />
               </div>
             </div>
 
             {/* Password */}
             <div className="input-group">
-              <label className="input-label">Password</label>
+              <label className="input-label" style={{ fontWeight: 600, fontSize: '0.8rem', letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+                Password
+              </label>
               <div style={{ position: 'relative' }}>
-                <Lock size={16} color="var(--text-muted)" style={{ position: 'absolute', left: '0.875rem', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
+                <Lock
+                  size={15}
+                  color={focused === 'password' ? 'var(--accent)' : 'var(--text-muted)'}
+                  style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', transition: 'color 0.2s' }}
+                />
                 <input
                   className="input"
                   type={showPwd ? 'text' : 'password'}
                   required
-                  placeholder="••••••••"
+                  placeholder="••••••••••"
                   value={form.password}
                   onChange={e => setForm(p => ({ ...p, password: e.target.value }))}
-                  style={{ paddingLeft: '2.5rem', paddingRight: '2.75rem' }}
+                  onFocus={() => setFocused('password')}
+                  onBlur={() => setFocused('')}
+                  style={{ paddingLeft: '2.75rem', paddingRight: '3rem', height: '52px', fontSize: '0.9375rem' }}
                 />
                 <button
                   type="button"
                   onClick={() => setShowPwd(v => !v)}
-                  style={{ position: 'absolute', right: '0.875rem', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}
+                  style={{
+                    position: 'absolute', right: '1rem', top: '50%', transform: 'translateY(-50%)',
+                    background: 'none', border: 'none', cursor: 'pointer',
+                    color: 'var(--text-muted)', padding: '0.25rem', borderRadius: '6px',
+                    transition: 'color 0.2s',
+                  }}
                 >
                   {showPwd ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>
               </div>
             </div>
 
-            <button type="submit" className="btn btn-primary w-full" style={{ marginTop: '0.25rem', justifyContent: 'center' }} disabled={loading}>
-              {loading ? <><Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> Signing in…</> : 'Sign In'}
+            {/* Submit */}
+            <button
+              type="submit"
+              className="btn btn-primary w-full"
+              disabled={loading}
+              style={{
+                justifyContent: 'center', height: '52px', fontSize: '1rem',
+                marginTop: '0.5rem', borderRadius: 'var(--radius-lg)',
+                background: 'linear-gradient(135deg, #7c3aed 0%, #ec4899 100%)',
+                boxShadow: '0 6px 28px rgba(124,58,237,0.35)',
+                letterSpacing: '0.01em',
+              }}
+            >
+              {loading
+                ? <><Loader2 size={18} style={{ animation: 'spin 1s linear infinite' }} /> Signing in…</>
+                : <>Sign In <ArrowRight size={17} /></>}
             </button>
           </form>
 
-          <div className="divider" />
+          {/* Divider */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', margin: '1.75rem 0' }}>
+            <div style={{ flex: 1, height: 1, background: 'var(--color-border)' }} />
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>Not an organizer?</span>
+            <div style={{ flex: 1, height: 1, background: 'var(--color-border)' }} />
+          </div>
 
-          <p className="text-center text-sm text-muted">
-            Attendee?{' '}
-            <Link to="/scan" style={{ color: 'var(--accent-light)', fontWeight: 600, textDecoration: 'none' }}>
-              Find your photos →
-            </Link>
+          {/* Attendee CTA */}
+          <Link
+            to="/scan"
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem',
+              padding: '0.875rem 1.5rem', borderRadius: 'var(--radius-lg)',
+              background: 'var(--accent-soft)', border: '1px solid rgba(124,58,237,0.25)',
+              color: 'var(--accent-light)', fontWeight: 600, fontSize: '0.9375rem',
+              textDecoration: 'none', transition: 'all 0.2s',
+            }}
+          >
+            <Camera size={17} />
+            Find My Photos as Attendee
+            <ArrowRight size={15} />
+          </Link>
+
+          <p style={{ textAlign: 'center', fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '1.5rem' }}>
+            Organizations are provisioned by the platform admin only.
           </p>
-        </div>
+        </motion.div>
+      </div>
 
-        <p className="text-center text-xs text-muted mt-6">
-          Organizations are provisioned by the platform admin only.
-        </p>
-      </motion.div>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      <style>{`
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @media (max-width: 768px) {
+          .login-left-panel { display: none !important; }
+        }
+      `}</style>
     </div>
   );
 }
