@@ -185,7 +185,24 @@ export default function EventManager() {
           <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
             <div className="flex justify-between items-center mb-4">
               <span className="text-sm text-muted">{photos.length} total photos</span>
-              <button className="btn btn-ghost btn-sm" onClick={loadPhotos}><RefreshCw size={13} /> Refresh</button>
+              <div className="flex items-center gap-2">
+                <button 
+                  className="btn btn-outline btn-sm" 
+                  onClick={async () => {
+                    if (window.confirm("Delete all queued and failed photos?")) {
+                      await api.delete(`/api/photos/events/${eventId}/clear?status_filter=queued`);
+                      await api.delete(`/api/photos/events/${eventId}/clear?status_filter=failed`);
+                      loadPhotos(); loadClusters(); loadEvent();
+                    }
+                  }}
+                >
+                  <AlertTriangle size={13} style={{ color: 'var(--error)' }} />
+                  Clear Stuck
+                </button>
+                <button className="btn btn-ghost btn-sm" onClick={loadPhotos}>
+                  <RefreshCw size={13} /> Refresh
+                </button>
+              </div>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
               {photos.slice(0, 100).map((photo) => (

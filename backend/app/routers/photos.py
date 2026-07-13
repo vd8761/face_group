@@ -242,6 +242,44 @@ async def list_event_photos(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Delete photos (bulk clear)
+# ─────────────────────────────────────────────────────────────────────────────
+@router.delete("/events/{event_id}/clear")
+async def clear_event_photos(
+    event_id: uuid.UUID,
+    current_user: User = Depends(require_organizer),
+    db: AsyncSession = Depends(get_db),
+    status_filter: str = "all" # 'all', 'failed', 'queued'
+):
+    """
+    Deletes photos from the database for an event. 
+    In a real app, this should also delete objects from R2. 
+    Here we delete DB rows to clear UI state.
+    """
+    await _get_event_or_404(event_id, current_user.tenant_id, db)
+
+    query = select(Photo).where(Photo.event_id == event_id)
+    if status_filter != "all":
+        query = query.where(Photo.status == status_filter)
+
+    result = await db.execute(query)
+    photos = result.scalars().all()
+
+    for p in photos:
+        await db.delete(p)
+    
+    # Also delete face clusters if we are clearing all photos
+    if status_filter == "all":
+        from ..models import FaceCluster
+        clusters_res = await db.execute(select(FaceCluster).where(FaceCluster.event_id == event_id))
+        for c in clusters_res.scalars().all():
+            await db.delete(c)
+
+    await db.commit()
+    return MessageResponse(message=f"Deleted {len(photos)} photos.")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Serve individual photo (signed URL)
 # ─────────────────────────────────────────────────────────────────────────────
 @router.get("/{photo_id}/thumbnail")
