@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     R2_BUCKET_NAME: str
     R2_PUBLIC_URL: Optional[str] = None  # Optional CDN URL prefix
 
+    # ── Google Drive Import ───────────────────────────────────────────────────
+    GOOGLE_DRIVE_API_KEY: Optional[str] = None  # Free API key from Google Cloud Console
+
     # ── Upstash Redis (Celery broker + result backend) ────────────────────────
     REDIS_URL: str  # rediss://default:token@host:6380
 

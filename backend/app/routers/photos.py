@@ -223,6 +223,268 @@ async def upload_photos(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Google Drive folder import
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _parse_drive_folder_id(url: str) -> str:
+    """
+    Extract the folder ID from any Google Drive folder URL format:
+      https://drive.google.com/drive/folders/FOLDER_ID
+      https://drive.google.com/drive/folders/FOLDER_ID?usp=sharing
+    """
+    import re
+    match = re.search(r"/folders/([a-zA-Z0-9_-]+)", url)
+    if not match:
+        raise ValueError("Could not parse a Google Drive folder ID from the URL provided.")
+    return match.group(1)
+
+
+@router.post("/events/{event_id}/import-drive", status_code=202)
+async def import_from_drive(
+    event_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    body: dict,
+    current_user: User = Depends(require_organizer),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Import all images from a public Google Drive folder.
+    - Parses the folder ID from the shared URL
+    - Lists image files via Google Drive API v3 (no OAuth needed for public folders)
+    - Downloads & uploads each image to R2 + DB
+    - Triggers background face detection
+    Requires GOOGLE_DRIVE_API_KEY env var to be set.
+    """
+    if not settings.GOOGLE_DRIVE_API_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="Google Drive import is not configured. Ask the admin to set GOOGLE_DRIVE_API_KEY.",
+        )
+
+    folder_url: str = body.get("folder_url", "").strip()
+    if not folder_url:
+        raise HTTPException(status_code=422, detail="folder_url is required.")
+
+    try:
+        folder_id = _parse_drive_folder_id(folder_url)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    await _get_event_or_404(event_id, current_user.tenant_id, db)
+
+    # ── List all image files in the folder via Drive API v3 ──────────────────
+    import httpx
+    api_key = settings.GOOGLE_DRIVE_API_KEY
+    drive_files = []
+    page_token = None
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        while True:
+            params = {
+                "q": f"'{folder_id}' in parents and trashed = false and (mimeType contains 'image/')",
+                "key": api_key,
+                "fields": "nextPageToken, files(id, name, mimeType, size)",
+                "pageSize": 1000,
+                "orderBy": "name",
+            }
+            if page_token:
+                params["pageToken"] = page_token
+
+            resp = await client.get(
+                "https://www.googleapis.com/drive/v3/files",
+                params=params,
+            )
+            if resp.status_code == 403:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Google Drive folder is private. Make it public: Share → Anyone with the link → Viewer.",
+                )
+            if resp.status_code != 200:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Google Drive API error {resp.status_code}: {resp.text[:200]}",
+                )
+
+            data = resp.json()
+            drive_files.extend(data.get("files", []))
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
+
+    if not drive_files:
+        return {"queued": 0, "message": "No image files found in this folder."}
+
+    # ── Check subscription limit ──────────────────────────────────────────────
+    sub_result = await db.execute(
+        select(Subscription).where(Subscription.tenant_id == current_user.tenant_id)
+    )
+    sub = sub_result.scalar_one_or_none()
+    current_count = (await db.execute(
+        select(func.count(Photo.id)).where(Photo.event_id == event_id)
+    )).scalar()
+
+    if sub and (current_count + len(drive_files)) > sub.max_photos_per_event:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Importing {len(drive_files)} photos would exceed your plan limit of {sub.max_photos_per_event}.",
+        )
+
+    # ── Create placeholder DB rows immediately (status=queued) ────────────────
+    queued_items = []   # [(photo_id, file_id, filename, mime_type)]
+    for f in drive_files:
+        photo_id = uuid.uuid4()
+        photo = Photo(
+            id=photo_id,
+            event_id=event_id,
+            tenant_id=current_user.tenant_id,
+            original_key="",       # filled in by background task
+            thumbnail_key="",
+            original_size_bytes=int(f.get("size") or 0),
+            filename=f["name"],
+            mime_type=f["mimeType"],
+            content_hash=None,
+            status=PhotoStatus.queued,
+        )
+        db.add(photo)
+        queued_items.append((str(photo_id), f["id"], f["name"], f["mimeType"]))
+
+    db.add(AuditLog(
+        user_id=current_user.id,
+        tenant_id=current_user.tenant_id,
+        action="photo.drive_import",
+        resource_type="event",
+        resource_id=str(event_id),
+        payload={"folder_id": folder_id, "count": len(queued_items)},
+    ))
+    await db.commit()
+
+    # ── Background task: download → R2 → face detect ─────────────────────────
+    background_tasks.add_task(
+        _process_drive_import,
+        queued_items=queued_items,
+        api_key=api_key,
+        event_id=event_id,
+        tenant_id=current_user.tenant_id,
+    )
+
+    return {
+        "queued": len(queued_items),
+        "message": f"Importing {len(queued_items)} photos from Google Drive in the background.",
+        "files": [f["name"] for f in drive_files[:10]],  # preview of first 10
+    }
+
+
+async def _process_drive_import(
+    queued_items: list,
+    api_key: str,
+    event_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+):
+    """
+    Background task: for each queued Drive file:
+    1. Download from Google Drive
+    2. Upload original + thumbnail to R2
+    3. Update DB row with keys + hash
+    4. Run face detection + clustering
+    """
+    from ..database import async_session_maker
+    from ..services.ml_pipeline import detect_and_embed, embedding_to_bytes
+    from ..services.clustering import assign_to_cluster, create_new_cluster
+    from fastapi.concurrency import run_in_threadpool
+    import httpx
+
+    async with httpx.AsyncClient(timeout=120) as client:
+        for photo_id_str, file_id, filename, mime_type in queued_items:
+            photo_uuid = uuid.UUID(photo_id_str)
+
+            async with async_session_maker() as db:
+                try:
+                    # 1. Download from Drive
+                    download_url = (
+                        f"https://www.googleapis.com/drive/v3/files/{file_id}"
+                        f"?alt=media&key={api_key}"
+                    )
+                    resp = await client.get(download_url)
+                    if resp.status_code != 200:
+                        raise ValueError(f"Drive download failed: {resp.status_code}")
+                    data = resp.content
+
+                    # 2. SHA-256 dedup check
+                    content_hash = hashlib.sha256(data).hexdigest()
+                    existing = await db.execute(
+                        select(Photo).where(
+                            Photo.event_id == event_id,
+                            Photo.content_hash == content_hash,
+                            Photo.id != photo_uuid,   # don't match self
+                        )
+                    )
+                    if existing.scalar_one_or_none():
+                        # Duplicate — delete placeholder row
+                        res = await db.execute(select(Photo).where(Photo.id == photo_uuid))
+                        p = res.scalar_one_or_none()
+                        if p:
+                            await db.delete(p)
+                        await db.commit()
+                        continue
+
+                    # 3. Upload to R2
+                    original_key = await upload_original(
+                        data, tenant_id, event_id, photo_uuid, filename, mime_type
+                    )
+                    thumbnail_key = await upload_thumbnail(
+                        data, tenant_id, event_id, photo_uuid
+                    )
+
+                    # 4. Update DB row
+                    res = await db.execute(select(Photo).where(Photo.id == photo_uuid))
+                    photo_obj = res.scalar_one()
+                    photo_obj.original_key = original_key
+                    photo_obj.thumbnail_key = thumbnail_key
+                    photo_obj.original_size_bytes = len(data)
+                    photo_obj.content_hash = content_hash
+                    photo_obj.status = PhotoStatus.processing
+                    await db.commit()
+
+                    # 5. Face detection + clustering
+                    detected_faces = await run_in_threadpool(detect_and_embed, data)
+                    for face in detected_faces:
+                        detection = FaceDetection(
+                            photo_id=photo_uuid,
+                            bbox={"x1": face.bbox[0], "y1": face.bbox[1],
+                                  "x2": face.bbox[2], "y2": face.bbox[3]},
+                            detection_confidence=face.confidence,
+                            quality_score=face.quality_score,
+                            embedding=embedding_to_bytes(face.embedding),
+                            is_low_quality=face.is_low_quality,
+                        )
+                        db.add(detection)
+                        await db.flush()
+                        if not face.is_low_quality:
+                            cluster_id = await assign_to_cluster(
+                                detection.id, face.embedding, event_id, db
+                            )
+                            if cluster_id is None:
+                                await create_new_cluster(
+                                    detection.id, face.embedding, event_id, db
+                                )
+
+                    photo_obj.status = PhotoStatus.done
+                    await db.commit()
+
+                except Exception as e:
+                    await db.rollback()
+                    try:
+                        res = await db.execute(select(Photo).where(Photo.id == photo_uuid))
+                        photo_obj = res.scalar_one_or_none()
+                        if photo_obj:
+                            photo_obj.status = PhotoStatus.failed
+                            photo_obj.error_message = str(e)[:500]
+                            await db.commit()
+                    except Exception:
+                        pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # List photos
 # ─────────────────────────────────────────────────────────────────────────────
 @router.get("/events/{event_id}", response_model=PhotoListResponse)

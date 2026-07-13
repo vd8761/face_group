@@ -2,21 +2,30 @@ import { useRef, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Upload, CloudUpload, X, CheckCircle2, AlertCircle,
-  Loader2, Image, RefreshCw, RotateCcw, FileWarning
+  Loader2, Image, RefreshCw, RotateCcw, FileWarning,
+  FolderOpen, Link, HardDriveDownload
 } from 'lucide-react';
 import api from '../api/client';
 
 const BATCH_SIZE = 5;
 
 export default function PhotoUpload({ eventId, onUploadComplete }) {
-  const [dragOver, setDragOver]     = useState(false);
-  const [files, setFiles]           = useState([]);
-  const [uploading, setUploading]   = useState(false);
-  const [failedFiles, setFailedFiles]     = useState([]);
-  const [duplicateNames, setDuplicateNames] = useState([]); // server-confirmed duplicates
+  const [uploadMode, setUploadMode]   = useState('local');   // 'local' | 'drive'
+  const [dragOver, setDragOver]       = useState(false);
+  const [files, setFiles]             = useState([]);
+  const [uploading, setUploading]     = useState(false);
+  const [failedFiles, setFailedFiles]       = useState([]);
+  const [duplicateNames, setDuplicateNames] = useState([]);
   const [uploadedCount, setUploadedCount]   = useState(0);
-  const [progress, setProgress]     = useState({ batchDone: 0, batchTotal: 0 });
-  const [done, setDone]             = useState(false);
+  const [progress, setProgress]       = useState({ batchDone: 0, batchTotal: 0 });
+  const [done, setDone]               = useState(false);
+
+  // Google Drive state
+  const [driveUrl, setDriveUrl]           = useState('');
+  const [driveImporting, setDriveImporting] = useState(false);
+  const [driveResult, setDriveResult]     = useState(null);  // { queued, message, files }
+  const [driveError, setDriveError]       = useState('');
+
   const inputRef = useRef(null);
 
   /* ── file selection ── */
@@ -151,11 +160,186 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
 
   const totalSizeMB = files.reduce((s, f) => s + f.size, 0) / 1024 / 1024;
 
+  /* ── Google Drive import handler ── */
+  const handleDriveImport = async () => {
+    if (!driveUrl.trim() || driveImporting) return;
+    setDriveImporting(true);
+    setDriveError('');
+    setDriveResult(null);
+    try {
+      const { data } = await api.post(
+        `/api/photos/events/${eventId}/import-drive`,
+        { folder_url: driveUrl.trim() },
+        { timeout: 30000 }
+      );
+      setDriveResult(data);
+      setDriveUrl('');
+      onUploadComplete?.({ accepted: data.queued });
+    } catch (err) {
+      const msg = err?.response?.data?.detail || err.message || 'Import failed';
+      setDriveError(msg);
+    } finally {
+      setDriveImporting(false);
+    }
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
 
-      {/* ── Drop zone — only show when not uploading and no result yet ── */}
-      {!done && (
+      {/* ── Mode switcher tabs ── */}
+      <div style={{ display: 'flex', gap: '0.5rem', borderBottom: '1px solid var(--color-border)', paddingBottom: '0' }}>
+        {[
+          { id: 'local', icon: <Upload size={14}/>, label: 'Upload from Device' },
+          { id: 'drive', icon: <HardDriveDownload size={14}/>, label: 'Import from Google Drive' },
+        ].map(tab => (
+          <button
+            key={tab.id}
+            onClick={() => { setUploadMode(tab.id); setDriveResult(null); setDriveError(''); }}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '0.4rem',
+              padding: '0.55rem 1rem',
+              background: 'none',
+              border: 'none',
+              borderBottom: uploadMode === tab.id ? '2px solid var(--accent)' : '2px solid transparent',
+              color: uploadMode === tab.id ? 'var(--accent)' : 'var(--color-muted)',
+              fontWeight: uploadMode === tab.id ? 600 : 400,
+              fontSize: '0.85rem',
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+              marginBottom: '-1px',
+            }}
+          >{tab.icon}{tab.label}</button>
+        ))}
+      </div>
+
+      {/* ── Google Drive Import Panel ── */}
+      {uploadMode === 'drive' && (
+        <motion.div
+          initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+          style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}
+        >
+          {/* Info card */}
+          <div style={{
+            background: 'linear-gradient(135deg, rgba(66,133,244,0.08), rgba(52,168,83,0.06))',
+            border: '1px solid rgba(66,133,244,0.2)',
+            borderRadius: 'var(--radius-lg)',
+            padding: '1rem 1.25rem',
+            fontSize: '0.85rem',
+            color: 'var(--color-text)',
+            display: 'flex', flexDirection: 'column', gap: '0.4rem',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 600, color: '#4285F4' }}>
+              <svg width="16" height="16" viewBox="0 0 87.3 78" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M6.6 66.85l3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8H0a15.92 15.92 0 001.9 7.5l4.7 6.35z" fill="#0066DA"/>
+                <path d="M43.65 25L29.9 1.2A15.37 15.37 0 0026.6 4.5L1.9 48.5A15.92 15.92 0 000 56h27.5L43.65 25z" fill="#00AC47"/>
+                <path d="M73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75 7.65-13.25c1.2-2.1 1.9-4.7 1.9-7.5H60.8l5.85 11.5 6.9 15.3z" fill="#EA4335"/>
+                <path d="M43.65 25L57.4 1.2C56.05.45 54.5 0 52.85 0H34.45c-1.65 0-3.2.45-4.55 1.2L43.65 25z" fill="#00832D"/>
+                <path d="M60.8 56H27.5L13.75 79.8c1.35.75 2.9 1.2 4.55 1.2h50.7c1.65 0 3.2-.45 4.55-1.2L60.8 56z" fill="#2684FC"/>
+                <path d="M73.4 27.5l-12.35-21.4A15.37 15.37 0 0057.4 1.2L43.65 25 60.8 56h27.45c0-2.8-.7-5.4-1.9-7.5L73.4 27.5z" fill="#FFBA00"/>
+              </svg>
+              Import from Google Drive
+            </div>
+            <div style={{ color: 'var(--color-muted)', lineHeight: 1.5 }}>
+              Paste a shared folder link. The folder must be set to <strong>"Anyone with the link — Viewer"</strong>.
+              All images inside will be imported automatically.
+            </div>
+            <div style={{ color: 'var(--color-muted)', fontSize: '0.8rem' }}>
+              ✅ Supports: JPEG, PNG, WEBP &nbsp;|&nbsp; ✅ Auto dedup (same file won't be imported twice)
+            </div>
+          </div>
+
+          {/* URL Input */}
+          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'stretch' }}>
+            <div style={{ flex: 1, position: 'relative' }}>
+              <Link size={15} style={{
+                position: 'absolute', left: '0.85rem', top: '50%', transform: 'translateY(-50%)',
+                color: 'var(--color-muted)',
+              }}/>
+              <input
+                type="url"
+                placeholder="https://drive.google.com/drive/folders/..."
+                value={driveUrl}
+                onChange={e => { setDriveUrl(e.target.value); setDriveError(''); setDriveResult(null); }}
+                onKeyDown={e => e.key === 'Enter' && handleDriveImport()}
+                style={{
+                  width: '100%',
+                  padding: '0.7rem 0.9rem 0.7rem 2.4rem',
+                  border: driveError ? '1.5px solid var(--error)' : '1.5px solid var(--color-border)',
+                  borderRadius: 'var(--radius-md)',
+                  background: 'var(--color-surface-2)',
+                  color: 'var(--color-text)',
+                  fontSize: '0.875rem',
+                  outline: 'none',
+                  boxSizing: 'border-box',
+                  transition: 'border 0.2s',
+                }}
+              />
+            </div>
+            <button
+              onClick={handleDriveImport}
+              disabled={!driveUrl.trim() || driveImporting}
+              className="btn btn-primary"
+              style={{ whiteSpace: 'nowrap', minWidth: '140px', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+            >
+              {driveImporting
+                ? <><Loader2 size={14} className="spin"/>Importing…</>
+                : <><FolderOpen size={14}/>Import Photos</>
+              }
+            </button>
+          </div>
+
+          {/* Error */}
+          {driveError && (
+            <div style={{
+              background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)',
+              borderRadius: 'var(--radius-md)', padding: '0.75rem 1rem',
+              color: 'var(--error)', fontSize: '0.85rem', display: 'flex', gap: '0.5rem', alignItems: 'flex-start',
+            }}>
+              <AlertCircle size={15} style={{ marginTop: 2, flexShrink: 0 }}/>
+              <span>{driveError}</span>
+            </div>
+          )}
+
+          {/* Success result */}
+          {driveResult && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }}
+              style={{
+                background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.25)',
+                borderRadius: 'var(--radius-lg)', padding: '1rem 1.25rem',
+                display: 'flex', flexDirection: 'column', gap: '0.6rem',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 600, color: 'var(--success)' }}>
+                <CheckCircle2 size={16}/>
+                {driveResult.queued} photos queued for import!
+              </div>
+              <div style={{ color: 'var(--color-muted)', fontSize: '0.82rem' }}>
+                Photos are downloading and processing in the background. Check the <strong>Photos</strong> tab in a moment.
+              </div>
+              {driveResult.files?.length > 0 && (
+                <div style={{ fontSize: '0.8rem', color: 'var(--color-muted)' }}>
+                  First files: {driveResult.files.join(', ')}{driveResult.queued > 10 ? ` +${driveResult.queued - 10} more…` : ''}
+                </div>
+              )}
+            </motion.div>
+          )}
+
+          {/* How-to guide */}
+          <details style={{ fontSize: '0.82rem', color: 'var(--color-muted)', cursor: 'pointer' }}>
+            <summary style={{ fontWeight: 500 }}>How to get a shareable Google Drive link?</summary>
+            <ol style={{ marginTop: '0.5rem', paddingLeft: '1.25rem', lineHeight: 1.8 }}>
+              <li>Open <strong>Google Drive</strong> and find your photos folder</li>
+              <li>Right-click the folder → <strong>"Share"</strong></li>
+              <li>Under "General access", choose <strong>"Anyone with the link"</strong> → <strong>Viewer</strong></li>
+              <li>Click <strong>"Copy link"</strong> and paste it above</li>
+            </ol>
+          </details>
+        </motion.div>
+      )}
+
+      {/* ── Drop zone — only show in local mode and when not done ── */}
+      {uploadMode === 'local' && !done && (
         <div
           style={{
             border: `2px dashed ${dragOver ? 'var(--accent)' : 'var(--color-border)'}`,
