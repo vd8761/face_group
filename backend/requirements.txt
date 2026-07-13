@@ -26,7 +26,7 @@ numpy==1.26.4
 opencv-python-headless==4.10.0.84  # Image decode (headless = no GUI deps)
 
 # Clustering
-hdbscan==0.8.38
+hdbscan>=0.8.38
 
 # Background workers
 celery[redis]==5.4.0
