@@ -48,12 +48,12 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
         let height = img.height;
         if (width > height) {
           if (width > MAX_SIZE) {
-            height *= Math.round(MAX_SIZE / width);
+            height = Math.round(height * (MAX_SIZE / width));
             width = MAX_SIZE;
           }
         } else {
           if (height > MAX_SIZE) {
-            width *= Math.round(MAX_SIZE / height);
+            width = Math.round(width * (MAX_SIZE / height));
             height = MAX_SIZE;
           }
         }
