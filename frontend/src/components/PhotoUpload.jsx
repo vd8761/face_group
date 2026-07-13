@@ -35,14 +35,59 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
   const removeFile = (idx) => setFiles(prev => prev.filter((_, i) => i !== idx));
   const removeFailedFile = (idx) => setFailedFiles(prev => prev.filter((_, i) => i !== idx));
 
+  /* ── image compression to prevent server OOM ── */
+  const compressImage = async (file) => {
+    return new Promise((resolve) => {
+      if (!file.type.startsWith('image/')) return resolve(file);
+      const img = new window.Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        const MAX_SIZE = 1920;
+        let width = img.width;
+        let height = img.height;
+        if (width > height) {
+          if (width > MAX_SIZE) {
+            height *= Math.round(MAX_SIZE / width);
+            width = MAX_SIZE;
+          }
+        } else {
+          if (height > MAX_SIZE) {
+            width *= Math.round(MAX_SIZE / height);
+            height = MAX_SIZE;
+          }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        canvas.toBlob((blob) => {
+          if (!blob) return resolve(file);
+          resolve(new File([blob], file.name, {
+            type: file.type === 'image/png' ? 'image/png' : 'image/jpeg',
+            lastModified: Date.now(),
+          }));
+        }, file.type === 'image/png' ? 'image/png' : 'image/jpeg', 0.85);
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        resolve(file);
+      };
+      img.src = url;
+    });
+  };
+
   /* ── core upload logic ── */
   const runUpload = async (filesToUpload) => {
     setUploading(true);
     setDone(false);
 
     const batches = [];
-    for (let i = 0; i < filesToUpload.length; i += BATCH_SIZE) {
-      batches.push(filesToUpload.slice(i, i + BATCH_SIZE));
+    // Reduce batch size to 2 to prevent backend timeout/OOM
+    const safeBatchSize = 2; 
+    for (let i = 0; i < filesToUpload.length; i += safeBatchSize) {
+      batches.push(filesToUpload.slice(i, i + safeBatchSize));
     }
 
     let accepted       = 0;
@@ -55,7 +100,10 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
     for (const batch of batches) {
       try {
         const formData = new FormData();
-        batch.forEach(f => formData.append('files', f));
+        for (const f of batch) {
+            const compressed = await compressImage(f);
+            formData.append('files', compressed);
+        }
 
         const { data } = await api.post(
           `/api/photos/events/${eventId}/upload`,
