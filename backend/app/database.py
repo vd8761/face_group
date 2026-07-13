@@ -23,6 +23,9 @@ AsyncSessionLocal = async_sessionmaker(
     autoflush=False,
 )
 
+# Alias used by background tasks that need their own independent session
+async_session_maker = AsyncSessionLocal
+
 
 class Base(DeclarativeBase):
     pass

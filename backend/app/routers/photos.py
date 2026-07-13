@@ -3,18 +3,18 @@ Photos router — bulk upload, listing with status, and signed URL serving.
 """
 import uuid
 import hashlib
+import asyncio
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, status
+from sqlalchemy.ext.asyncio import AsyncSession, AsyncEngine
 from sqlalchemy import select, func
 
-from ..database import get_db
-from ..models import Photo, PhotoStatus, Event, Subscription, User, AuditLog
+from ..database import get_db, engine
+from ..models import Photo, PhotoStatus, Event, Subscription, User, AuditLog, FaceDetection
 from ..auth import require_organizer, require_attendee, get_current_user
-from ..services.storage import upload_original, upload_thumbnail, generate_presigned_url
+from ..services.storage import upload_original, upload_thumbnail, generate_presigned_url, delete_objects
 from ..schemas import PhotoResponse, PhotoListResponse, MessageResponse
-from ..workers.tasks import process_photo
 from ..config import get_settings
 
 settings = get_settings()
@@ -32,18 +32,85 @@ async def _get_event_or_404(event_id: uuid.UUID, tenant_id: uuid.UUID, db: Async
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Background face processing — runs AFTER the HTTP response is already sent
+# ─────────────────────────────────────────────────────────────────────────────
+async def _process_photos_background(
+    photo_ids: List[str],
+    file_bytes_list: List[bytes],
+    event_id: uuid.UUID,
+):
+    """
+    Run face detection + clustering on each photo after the HTTP 202 response
+    is already sent to the client. Uses its own DB session so it won't affect
+    the response session.
+    """
+    from ..database import async_session_maker
+    from ..services.ml_pipeline import detect_and_embed, embedding_to_bytes
+    from ..services.clustering import assign_to_cluster, create_new_cluster
+    from fastapi.concurrency import run_in_threadpool
+
+    for pid, data_bytes in zip(photo_ids, file_bytes_list):
+        photo_uuid = uuid.UUID(pid)
+        async with async_session_maker() as db:
+            try:
+                detected_faces = await run_in_threadpool(detect_and_embed, data_bytes)
+
+                for face in detected_faces:
+                    detection = FaceDetection(
+                        photo_id=photo_uuid,
+                        bbox={"x1": face.bbox[0], "y1": face.bbox[1],
+                              "x2": face.bbox[2], "y2": face.bbox[3]},
+                        detection_confidence=face.confidence,
+                        quality_score=face.quality_score,
+                        embedding=embedding_to_bytes(face.embedding),
+                        is_low_quality=face.is_low_quality,
+                    )
+                    db.add(detection)
+                    await db.flush()
+
+                    if not face.is_low_quality:
+                        cluster_id = await assign_to_cluster(
+                            detection.id, face.embedding, event_id, db
+                        )
+                        if cluster_id is None:
+                            await create_new_cluster(
+                                detection.id, face.embedding, event_id, db
+                            )
+
+                result = await db.execute(select(Photo).where(Photo.id == photo_uuid))
+                photo_obj = result.scalar_one_or_none()
+                if photo_obj:
+                    photo_obj.status = PhotoStatus.done
+                await db.commit()
+
+            except Exception as e:
+                await db.rollback()
+                try:
+                    result = await db.execute(select(Photo).where(Photo.id == photo_uuid))
+                    photo_obj = result.scalar_one_or_none()
+                    if photo_obj:
+                        photo_obj.status = PhotoStatus.failed
+                        photo_obj.error_message = str(e)[:500]
+                        await db.commit()
+                except Exception:
+                    pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Upload
 # ─────────────────────────────────────────────────────────────────────────────
 @router.post("/events/{event_id}/upload", status_code=202)
 async def upload_photos(
     event_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
     files: List[UploadFile] = File(...),
     current_user: User = Depends(require_organizer),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Bulk photo upload. Returns immediately (202 Accepted).
-    Face processing happens asynchronously via Celery.
+    Bulk photo upload.
+    Step 1: Upload to R2 + save DB row  → returns 202 immediately to frontend.
+    Step 2: Face detection runs in background AFTER response is sent.
     """
     event = await _get_event_or_404(event_id, current_user.tenant_id, db)
 
@@ -63,28 +130,25 @@ async def upload_photos(
                    f"Already have {current_count}.",
         )
 
-    created_ids  = []
+    created_ids     = []
     file_bytes_list = []
-    total_bytes  = 0
-    duplicates   = []   # files skipped because hash already exists
-    skipped_fmt  = []   # files skipped due to bad format/size
+    total_bytes     = 0
+    duplicates      = []
+    skipped_fmt     = []
 
     for file in files:
-        # Validate type
         if file.content_type not in settings.ALLOWED_IMAGE_TYPES:
             skipped_fmt.append(file.filename)
             continue
 
         data = await file.read()
 
-        # Validate size
         if len(data) > settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024:
             skipped_fmt.append(file.filename)
             continue
 
-        # ── SHA-256 duplicate check ──────────────────────────────────────────
+        # SHA-256 duplicate check
         content_hash = hashlib.sha256(data).hexdigest()
-
         existing = await db.execute(
             select(Photo).where(
                 Photo.event_id == event_id,
@@ -93,12 +157,11 @@ async def upload_photos(
         )
         if existing.scalar_one_or_none():
             duplicates.append(file.filename)
-            continue   # Skip — exact same file already in this event
-        # ────────────────────────────────────────────────────────────────────
+            continue
 
         photo_id = uuid.uuid4()
 
-        # Upload original + thumbnail to R2
+        # Upload to R2
         original_key = await upload_original(
             data, current_user.tenant_id, event_id, photo_id,
             file.filename or f"{photo_id}.jpg", file.content_type
@@ -116,8 +179,8 @@ async def upload_photos(
             original_size_bytes=len(data),
             filename=file.filename or f"{photo_id}.jpg",
             mime_type=file.content_type,
-            content_hash=content_hash,          # ← store hash for future dedup
-            status=PhotoStatus.processing,
+            content_hash=content_hash,
+            status=PhotoStatus.queued,   # queued — bg task will set to done/failed
         )
         db.add(photo)
         total_bytes += len(data)
@@ -126,11 +189,9 @@ async def upload_photos(
 
     await db.flush()
 
-    # Update storage usage
     if sub:
         sub.current_storage_bytes = (sub.current_storage_bytes or 0) + total_bytes
 
-    # Audit log
     db.add(AuditLog(
         user_id=current_user.id,
         tenant_id=current_user.tenant_id,
@@ -140,63 +201,23 @@ async def upload_photos(
         payload={"count": len(created_ids)},
     ))
 
-    # Process ML pipeline immediately (synchronously in threadpool)
-    # We do not use Celery anymore to prevent OOM and ensure immediate processing
-    from fastapi.concurrency import run_in_threadpool
-    from ..services.ml_pipeline import detect_and_embed, embedding_to_bytes
-    from ..services.clustering import assign_to_cluster, create_new_cluster
-    from ..models import FaceDetection
+    await db.commit()
 
-    for pid, data_bytes in zip(created_ids, file_bytes_list):
-        photo_uuid = uuid.UUID(pid)
-        try:
-            # 1. Detect faces
-            detected_faces = await run_in_threadpool(detect_and_embed, data_bytes)
-            
-            # 2. Store detections & assign clusters
-            for face in detected_faces:
-                detection = FaceDetection(
-                    photo_id=photo_uuid,
-                    bbox={"x1": face.bbox[0], "y1": face.bbox[1], "x2": face.bbox[2], "y2": face.bbox[3]},
-                    detection_confidence=face.confidence,
-                    quality_score=face.quality_score,
-                    embedding=embedding_to_bytes(face.embedding),
-                    is_low_quality=face.is_low_quality,
-                )
-                db.add(detection)
-                await db.flush()
+    # ── Kick off background face processing (runs AFTER response is sent) ────
+    if created_ids:
+        background_tasks.add_task(
+            _process_photos_background,
+            photo_ids=created_ids,
+            file_bytes_list=file_bytes_list,
+            event_id=event_id,
+        )
 
-                if not face.is_low_quality:
-                    cluster_id = await assign_to_cluster(
-                        detection.id, face.embedding, event_id, db
-                    )
-                    if cluster_id is None:
-                        await create_new_cluster(
-                            detection.id, face.embedding, event_id, db
-                        )
-            
-            # 3. Mark as done
-            result = await db.execute(select(Photo).where(Photo.id == photo_uuid))
-            photo_obj = result.scalar_one()
-            photo_obj.status = PhotoStatus.done
-            await db.commit()
-            
-        except Exception as e:
-            await db.rollback()
-            # Update to failed on error
-            result = await db.execute(select(Photo).where(Photo.id == photo_uuid))
-            photo_obj = result.scalar_one_or_none()
-            if photo_obj:
-                photo_obj.status = PhotoStatus.failed
-                photo_obj.error_message = str(e)[:500]
-                await db.commit()
-
-
+    # ── Return 202 immediately — frontend shows green success ─────────────────
     return {
         "accepted":        len(created_ids),
         "skipped_format":  len(skipped_fmt),
         "duplicates":      len(duplicates),
-        "duplicate_names": duplicates,          # filenames that were exact duplicates
+        "duplicate_names": duplicates,
         "photo_ids":       created_ids,
     }
 
