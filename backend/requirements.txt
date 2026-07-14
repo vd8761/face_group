@@ -18,6 +18,10 @@ bcrypt==4.2.1
 boto3==1.35.76
 Pillow==11.0.0
 
+# Image format support
+rawpy>=0.19.0          # Sony ARW, Canon CR2/CR3, Nikon NEF, DNG, RAF, ORF etc.
+pillow-heif>=0.15.0    # HEIC / HEIF (iPhone photos)
+
 # ML — Face Detection + Embedding
 # buffalo_l model: ~500MB download, ~1.5GB RAM at runtime
 # Requires Render Standard plan (2GB RAM) or equivalent

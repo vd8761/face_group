@@ -37,6 +37,7 @@ async def _get_event_or_404(event_id: uuid.UUID, tenant_id: uuid.UUID, db: Async
 async def _process_photos_background(
     photo_ids: List[str],
     file_bytes_list: List[bytes],
+    filenames: List[str],
     event_id: uuid.UUID,
     event: Event,
 ):
@@ -51,11 +52,11 @@ async def _process_photos_background(
     from ..services.storage import upload_face_crop
     from fastapi.concurrency import run_in_threadpool
 
-    for pid, data_bytes in zip(photo_ids, file_bytes_list):
+    for pid, data_bytes, fname in zip(photo_ids, file_bytes_list, filenames):
         photo_uuid = uuid.UUID(pid)
         async with async_session_maker() as db:
             try:
-                detected_faces = await run_in_threadpool(detect_and_embed, data_bytes)
+                detected_faces = await run_in_threadpool(detect_and_embed, data_bytes, fname)
 
                 for face in detected_faces:
                     detection = FaceDetection(
@@ -144,12 +145,21 @@ async def upload_photos(
 
     created_ids     = []
     file_bytes_list = []
+    filenames_list  = []
     total_bytes     = 0
     duplicates      = []
     skipped_fmt     = []
 
+    # RAW file extensions — browsers report these as octet-stream, not image/*
+    RAW_EXTS = {'.arw', '.cr2', '.cr3', '.nef', '.dng', '.raf', '.orf', '.rw2', '.pef', '.srw'}
+
     for file in files:
-        if file.content_type not in settings.ALLOWED_IMAGE_TYPES:
+        fname = file.filename or ''
+        import os as _os
+        ext = _os.path.splitext(fname.lower())[1]
+        # Accept known RAW extensions even if MIME is octet-stream
+        is_raw = ext in RAW_EXTS
+        if not is_raw and file.content_type not in settings.ALLOWED_IMAGE_TYPES:
             skipped_fmt.append(file.filename)
             continue
 
@@ -198,6 +208,7 @@ async def upload_photos(
         total_bytes += len(data)
         created_ids.append(str(photo_id))
         file_bytes_list.append(data)
+        filenames_list.append(fname)
 
     await db.flush()
 
@@ -221,6 +232,7 @@ async def upload_photos(
             _process_photos_background,
             photo_ids=created_ids,
             file_bytes_list=file_bytes_list,
+            filenames=filenames_list,
             event_id=event_id,
             event=event,
         )
@@ -403,6 +415,7 @@ async def _process_drive_import(
     from ..database import async_session_maker
     from ..services.ml_pipeline import detect_and_embed, embedding_to_bytes
     from ..services.clustering import assign_to_cluster, create_new_cluster
+    from ..services.storage import upload_face_crop
     from fastapi.concurrency import run_in_threadpool
     import httpx
 
@@ -459,7 +472,7 @@ async def _process_drive_import(
                     await db.commit()
 
                     # 5. Face detection + clustering
-                    detected_faces = await run_in_threadpool(detect_and_embed, data)
+                    detected_faces = await run_in_threadpool(detect_and_embed, data, filename)
                     for face in detected_faces:
                         detection = FaceDetection(
                             photo_id=photo_uuid,

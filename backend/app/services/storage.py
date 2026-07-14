@@ -77,12 +77,35 @@ async def upload_thumbnail(
     event_id: uuid.UUID,
     photo_id: uuid.UUID,
     target_size: tuple = (400, 400),
+    filename: str = '',
 ) -> str:
-    """Generate and upload a compressed JPEG thumbnail; return its object key."""
-    img = Image.open(io.BytesIO(data))
+    """Generate and upload a correctly-oriented JPEG thumbnail; return its object key."""
+    import os as _os
+    from PIL import ImageOps
+
+    ext = _os.path.splitext(filename.lower())[1] if filename else ''
+    RAW_EXTS = {'.arw', '.cr2', '.cr3', '.nef', '.dng', '.raf', '.orf', '.rw2', '.pef', '.srw'}
+
+    if ext in RAW_EXTS:
+        # For RAW files, use rawpy to get a rendered RGB image
+        try:
+            import rawpy
+            import numpy as np
+            with rawpy.imread(io.BytesIO(data)) as raw:
+                rgb = raw.postprocess(use_camera_wb=True, half_size=True, output_bps=8)
+            img = Image.fromarray(rgb)
+        except ImportError:
+            # rawpy not available — try PIL (will likely fail for RAW but won't crash)
+            img = Image.open(io.BytesIO(data))
+    else:
+        img = Image.open(io.BytesIO(data))
+
+    # Apply EXIF rotation — fixes portrait/rotated photos
+    img = ImageOps.exif_transpose(img)
     img.thumbnail(target_size, Image.LANCZOS)
+
     buf = io.BytesIO()
-    img.convert("RGB").save(buf, format="JPEG", quality=75, optimize=True)
+    img.convert("RGB").save(buf, format="JPEG", quality=80, optimize=True)
     buf.seek(0)
 
     key = _make_key(tenant_id, event_id, photo_id, "thumbnail", "jpg")
@@ -93,6 +116,7 @@ async def upload_thumbnail(
         ContentType="image/jpeg",
     )
     return key
+
 
 
 async def upload_face_crop(
