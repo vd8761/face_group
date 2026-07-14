@@ -15,23 +15,13 @@ export default function Landing() {
       
       {/* ── Hero Section ── */}
       <section style={{ 
-        padding: '6rem 1.5rem 4rem', 
+        padding: '3rem 1.5rem 4rem', 
         textAlign: 'center', 
         position: 'relative', 
         zIndex: 1,
         background: 'radial-gradient(ellipse at top, rgba(139, 92, 246, 0.08) 0%, transparent 60%)',
       }}>
         <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }}>
-          
-          <div style={{
-            display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
-            background: 'var(--color-surface-2)', border: '1px solid var(--border-light)',
-            borderRadius: 'var(--radius-pill)', padding: '0.4rem 1.25rem', marginBottom: '2rem',
-          }}>
-            <span style={{ fontSize: '0.8125rem', color: 'var(--text-main)', fontWeight: 600 }}>
-              AI-Powered · Event-Ready · Privacy-First
-            </span>
-          </div>
 
           <h1 className="font-display" style={{ 
             maxWidth: 720, margin: '0 auto 1.5rem', 
