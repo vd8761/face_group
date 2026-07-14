@@ -11,36 +11,54 @@ const features = [
 
 export default function Landing() {
   return (
-    <div className="hero-bg" style={{ flex: 1 }}>
-      {/* Hero */}
-      <section style={{ padding: 'clamp(4rem, 10vw, 8rem) 1.5rem 4rem', textAlign: 'center', position: 'relative', zIndex: 1 }}>
-        <motion.div initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }}>
+    <div style={{ flex: 1, background: 'var(--color-bg)', display: 'flex', flexDirection: 'column' }}>
+      
+      {/* ── Hero Section ── */}
+      <section style={{ 
+        padding: '6rem 1.5rem 4rem', 
+        textAlign: 'center', 
+        position: 'relative', 
+        zIndex: 1,
+        background: 'radial-gradient(ellipse at top, rgba(139, 92, 246, 0.08) 0%, transparent 60%)',
+      }}>
+        <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }}>
+          
           <div style={{
-            display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
-            background: 'rgba(124,58,237,0.1)', border: '1px solid rgba(124,58,237,0.25)',
-            borderRadius: '999px', padding: '0.375rem 1rem', marginBottom: '1.5rem',
+            display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
+            background: 'var(--color-surface-2)', border: '1px solid var(--border-light)',
+            borderRadius: 'var(--radius-pill)', padding: '0.4rem 1.25rem', marginBottom: '2rem',
           }}>
-            <Zap size={13} color="var(--accent-light)" />
-            <span style={{ fontSize: '0.8125rem', color: 'var(--accent-light)', fontWeight: 600 }}>
+            <span style={{ fontSize: '0.8125rem', color: 'var(--text-main)', fontWeight: 600 }}>
               AI-Powered · Event-Ready · Privacy-First
             </span>
           </div>
 
-          <h1 style={{ maxWidth: 720, margin: '0 auto 1.25rem' }}>
-            Find <span className="gradient-text">Every Photo</span><br />
+          <h1 className="font-display" style={{ 
+            maxWidth: 720, margin: '0 auto 1.5rem', 
+            fontSize: 'clamp(2.5rem, 6vw, 4rem)',
+            fontWeight: 800,
+            lineHeight: 1.15,
+            letterSpacing: '-0.03em',
+            color: 'var(--ink)'
+          }}>
+            Find Every Photo<br />
             You Appear In
           </h1>
 
-          <p style={{ maxWidth: 560, margin: '0 auto 2.5rem', fontSize: '1.125rem', color: 'var(--text-secondary)' }}>
-            Event organizers upload photos. Attendees scan their face and instantly
-            get every picture they're in — as a gallery or a ZIP download.
+          <p style={{ 
+            maxWidth: 600, margin: '0 auto 2.5rem', 
+            fontSize: '1.125rem', color: 'var(--text-muted)',
+            lineHeight: 1.6
+          }}>
+            Event organizers upload photos. Attendees scan their face and
+            instantly get every picture they're in — as a gallery or a ZIP download.
           </p>
 
-          <div className="flex justify-center gap-4" style={{ flexWrap: 'wrap' }}>
-            <Link to="/scan" className="btn btn-primary btn-lg">
+          <div style={{ display: 'flex', justifyContent: 'center', gap: '1.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            <Link to="/scan" className="btn btn-primary btn-pill" style={{ padding: '0.875rem 2rem', fontSize: '1rem', boxShadow: '0 8px 24px rgba(91, 95, 239, 0.25)' }}>
               <Camera size={20} /> Find My Photos
             </Link>
-            <Link to="/login" className="btn btn-ghost btn-lg">
+            <Link to="/login" className="btn btn-ghost" style={{ padding: '0.875rem 1.5rem', fontSize: '1rem', color: 'var(--text-muted)', fontWeight: 600 }}>
               Organizer Login <ArrowRight size={16} />
             </Link>
           </div>
@@ -48,69 +66,87 @@ export default function Landing() {
 
         {/* Floating stat badges */}
         <motion.div
-          initial={{ opacity: 0, y: 40 }}
+          initial={{ opacity: 0, y: 30 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.4, duration: 0.7 }}
-          style={{ display: 'flex', justifyContent: 'center', gap: '1rem', marginTop: '3.5rem', flexWrap: 'wrap' }}
+          transition={{ delay: 0.3, duration: 0.7 }}
+          style={{ display: 'flex', justifyContent: 'center', gap: '1.25rem', marginTop: '5rem', flexWrap: 'wrap' }}
         >
           {[
-            { icon: Image,  value: '5,000+', label: 'Photos/event' },
-            { icon: Users,  value: '< 3s',   label: 'Scan to results' },
-            { icon: Shield, value: '100%',   label: 'Privacy compliant' },
-          ].map(({ icon: Icon, value, label }) => (
-            <div key={label} className="card" style={{ padding: '1rem 1.5rem', display: 'flex', alignItems: 'center', gap: '0.875rem', minWidth: 160 }}>
-              <div style={{ width: 38, height: 38, background: 'var(--accent-soft)', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                <Icon size={18} color="var(--accent-light)" />
-              </div>
-              <div>
-                <div style={{ fontSize: '1.375rem', fontWeight: 800, letterSpacing: '-0.03em', color: 'var(--text-primary)' }}>{value}</div>
-                <div className="text-xs text-muted">{label}</div>
-              </div>
+            { value: '5,000+', label: 'Photos/event' },
+            { value: '< 3s',   label: 'Scan to results' },
+            { value: '100%',   label: 'Privacy compliant' },
+          ].map(({ value, label }) => (
+            <div key={label} style={{ 
+              background: '#fff', 
+              padding: '1.25rem 2.5rem', 
+              borderRadius: 'var(--radius-lg)',
+              border: '1px solid var(--border-light)',
+              boxShadow: '0 4px 20px rgba(0,0,0,0.03)',
+              minWidth: 180,
+              textAlign: 'center'
+            }}>
+              <div className="font-display" style={{ fontSize: '1.5rem', fontWeight: 800, letterSpacing: '-0.03em', color: 'var(--ink)' }}>{value}</div>
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 500, marginTop: '0.2rem' }}>{label}</div>
             </div>
           ))}
         </motion.div>
       </section>
 
-      {/* Features grid */}
-      <section style={{ padding: '4rem 1.5rem', position: 'relative', zIndex: 1 }}>
+      {/* ── Features grid ── */}
+      <section style={{ padding: '6rem 1.5rem', background: '#fafafa' }}>
         <div className="container">
           <motion.div
             initial={{ opacity: 0 }} whileInView={{ opacity: 1 }}
             viewport={{ once: true }} transition={{ duration: 0.5 }}
+            style={{ textAlign: 'center', marginBottom: '4rem' }}
           >
-            <h2 className="text-center" style={{ marginBottom: '0.75rem' }}>How it works</h2>
-            <p className="text-center text-secondary" style={{ marginBottom: '3rem' }}>
+            <h2 className="font-display" style={{ fontSize: '2rem', fontWeight: 800, marginBottom: '0.75rem', color: 'var(--ink)' }}>How it works</h2>
+            <p style={{ color: 'var(--text-muted)', fontSize: '1.1rem' }}>
               Built for event organizers. Loved by every attendee.
             </p>
           </motion.div>
 
-          <div className="grid-2" style={{ gap: '1.25rem', maxWidth: 900, margin: '0 auto' }}>
-            {features.map(({ icon: Icon, title, desc }, i) => (
+          <div style={{ 
+            display: 'grid', 
+            gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', 
+            gap: '1.5rem', 
+            maxWidth: 1000, 
+            margin: '0 auto' 
+          }}>
+            {features.map(({ title, desc }, i) => (
               <motion.div
                 key={title}
-                className="card card-glow"
                 initial={{ opacity: 0, y: 20 }}
                 whileInView={{ opacity: 1, y: 0 }}
                 viewport={{ once: true }}
                 transition={{ delay: i * 0.1 }}
+                style={{
+                  background: '#fff',
+                  padding: '2.5rem 2rem',
+                  borderRadius: 'var(--radius-xl)',
+                  border: '1px solid var(--border-light)',
+                  boxShadow: '0 2px 10px rgba(0,0,0,0.01)'
+                }}
               >
-                <div style={{ width: 48, height: 48, background: 'var(--accent-soft)', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '1rem' }}>
-                  <Icon size={22} color="var(--accent-light)" />
-                </div>
-                <h3 style={{ marginBottom: '0.5rem' }}>{title}</h3>
-                <p className="text-sm">{desc}</p>
+                <h3 className="font-display" style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '1rem', color: 'var(--ink)' }}>{title}</h3>
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.95rem', lineHeight: 1.6, margin: 0 }}>{desc}</p>
               </motion.div>
             ))}
           </div>
         </div>
       </section>
 
-      {/* CTA */}
-      <section style={{ padding: '4rem 1.5rem 6rem', textAlign: 'center', position: 'relative', zIndex: 1 }}>
-        <div className="card" style={{ maxWidth: 600, margin: '0 auto', textAlign: 'center', padding: '3rem 2rem', background: 'rgba(124,58,237,0.06)', borderColor: 'rgba(124,58,237,0.2)' }}>
-          <h2 style={{ marginBottom: '0.75rem' }}>Ready to find your photos?</h2>
-          <p style={{ marginBottom: '2rem' }}>Enter your event access code and scan your face.</p>
-          <Link to="/scan" className="btn btn-primary btn-lg">
+      {/* ── CTA ── */}
+      <section style={{ padding: '6rem 1.5rem 8rem', textAlign: 'center', background: 'var(--color-bg)' }}>
+        <div style={{ 
+          maxWidth: 700, margin: '0 auto', textAlign: 'center', padding: '4rem 2rem', 
+          background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.08) 0%, rgba(6, 182, 212, 0.05) 100%)', 
+          border: '1px solid rgba(139, 92, 246, 0.15)',
+          borderRadius: 'var(--radius-2xl)'
+        }}>
+          <h2 className="font-display" style={{ fontSize: '2rem', fontWeight: 800, marginBottom: '1rem', color: 'var(--ink)' }}>Ready to find your photos?</h2>
+          <p style={{ marginBottom: '2.5rem', color: 'var(--text-muted)', fontSize: '1.1rem' }}>Enter your event access code and scan your face.</p>
+          <Link to="/scan" className="btn btn-primary btn-pill" style={{ padding: '0.875rem 2rem', fontSize: '1rem' }}>
             <Camera size={20} /> Start Scanning <ArrowRight size={16} />
           </Link>
         </div>

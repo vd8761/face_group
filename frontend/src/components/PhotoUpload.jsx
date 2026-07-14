@@ -30,8 +30,8 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
 
   /* ── file selection ── */
   const addFiles = useCallback((newFiles) => {
-    const validTypes = ['image/jpeg', 'image/png', 'image/heic', 'image/webp'];
-    const filtered = Array.from(newFiles).filter(f => validTypes.includes(f.type));
+    const validTypes = ['image/jpeg', 'image/jpg'];
+    const filtered = Array.from(newFiles).filter(f => validTypes.includes(f.type) || f.name.toLowerCase().endsWith('.jpg') || f.name.toLowerCase().endsWith('.jpeg'));
     setFiles(prev => {
       const existing = new Set(prev.map(f => f.name + f.size));
       return [...prev, ...filtered.filter(f => !existing.has(f.name + f.size))];
@@ -244,7 +244,7 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
               All images inside will be imported automatically.
             </div>
             <div style={{ color: 'var(--color-muted)', fontSize: '0.8rem' }}>
-              ✅ Supports: JPEG, PNG, WEBP &nbsp;|&nbsp; ✅ Auto dedup (same file won't be imported twice)
+              ✅ Supports: JPEG / JPG only &nbsp;|&nbsp; ✅ Auto dedup (same file won't be imported twice)
             </div>
           </div>
 
@@ -437,7 +437,7 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
         >
           <input
             ref={inputRef} type="file" multiple
-            accept="image/jpeg,image/png,image/heic,image/webp"
+            accept="image/jpeg,image/jpg,.jpg,.jpeg"
             style={{ display: 'none' }}
             onChange={(e) => addFiles(e.target.files)}
           />
@@ -445,7 +445,7 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
             Drop photos here or browse
           </h3>
           <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-            JPEG · PNG · HEIC · WEBP &nbsp;·&nbsp; Max 25 MB each &nbsp;·&nbsp; Batches of {BATCH_SIZE}
+            JPEG / JPG only &nbsp;·&nbsp; Max 25 MB each &nbsp;·&nbsp; Batches of {BATCH_SIZE}
           </p>
         </div>
       )}

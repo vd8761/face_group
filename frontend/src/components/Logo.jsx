@@ -19,11 +19,11 @@ export default function Logo({ light = false, style = {}, hideText = false }) {
       {/* Typography */}
       {!hideText && (
         <div style={{ 
-          display: 'flex', alignItems: 'center', gap: '0.2rem',
-          fontSize: '1.4rem', fontWeight: 800, 
-          fontFamily: "'Plus Jakarta Sans', system-ui, sans-serif",
-          letterSpacing: '-0.03em', lineHeight: 1,
-          marginTop: '0.1rem'
+          display: 'flex', alignItems: 'center', gap: '0.15rem',
+          fontSize: '1.6rem', fontWeight: 900, 
+          fontFamily: "'Outfit', system-ui, sans-serif",
+          letterSpacing: '-0.04em', lineHeight: 1,
+          marginTop: '0.15rem'
         }}>
           <span style={{ color: textColor }}>
             UrFace
@@ -32,7 +32,8 @@ export default function Logo({ light = false, style = {}, hideText = false }) {
             background: 'linear-gradient(90deg, #8B5CF6, #06B6D4)', 
             WebkitBackgroundClip: 'text', 
             WebkitTextFillColor: 'transparent',
-            backgroundClip: 'text'
+            backgroundClip: 'text',
+            marginLeft: '0.15rem'
           }}>
             AI
           </span>
