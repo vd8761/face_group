@@ -225,19 +225,23 @@ export default function EventManager() {
                     className="btn btn-primary btn-sm"
                     onClick={async () => {
                       const btn = document.getElementById('retry-failed-btn');
-                      const orig = btn.textContent;
                       btn.disabled = true;
                       btn.textContent = 'Retrying…';
                       try {
                         const res = await api.post(`/api/photos/events/${eventId}/retry-failed`);
                         const data = res.data;
-                        alert(`✅ ${data.message}`);
-                        setTimeout(() => { loadPhotos(); loadClusters(); }, 2000);
+                        alert(`✅ ${data.message}\n\nPhotos will process in the background. Refresh the page in 30 seconds.`);
+                        setTimeout(() => { loadPhotos(); loadClusters(); }, 3000);
                       } catch(e) {
-                        alert('Retry failed: ' + (e?.response?.data?.detail || e.message));
+                        const status = e?.response?.status;
+                        if (status === 404) {
+                          alert('⏳ Backend is still deploying — please wait 2-3 minutes and try again.');
+                        } else {
+                          alert('Error: ' + (e?.response?.data?.detail || e.message));
+                        }
                       } finally {
                         btn.disabled = false;
-                        btn.textContent = orig;
+                        btn.textContent = `Retry Failed (${photos.filter(p => p.status === 'failed' || p.status === 'queued' || p.status === 'processing').length})`;
                       }
                     }}
                   >
