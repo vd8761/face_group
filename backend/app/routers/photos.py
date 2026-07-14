@@ -6,6 +6,7 @@ import hashlib
 import asyncio
 import os
 import io
+import gc
 from typing import List
 
 import httpx
@@ -54,6 +55,8 @@ async def _process_photos_background(
     Run face detection + clustering on each photo after the HTTP 202 response
     is already sent to the client. Uses its own DB session so it won't affect
     the response session.
+    Photos are processed ONE AT A TIME to keep memory usage within 2 GB.
+    The image bytes are deleted after each photo to free RAM immediately.
     """
 
     for pid, data_bytes, fname in zip(photo_ids, file_bytes_list, filenames):
@@ -61,6 +64,9 @@ async def _process_photos_background(
         async with async_session_maker() as db:
             try:
                 detected_faces = await run_in_threadpool(detect_and_embed, data_bytes, fname)
+                # Free the raw image bytes immediately — they can be 50-100 MB for RAW files
+                del data_bytes
+                gc.collect()
 
                 for face in detected_faces:
                     detection = FaceDetection(
@@ -76,7 +82,6 @@ async def _process_photos_background(
                     await db.flush()
 
                     if not face.is_low_quality:
-                        # Upload crop to R2 and save the key
                         face_key = await upload_face_crop(
                             face.face_crop_bytes,
                             event.tenant_id,
@@ -101,6 +106,7 @@ async def _process_photos_background(
                 await db.commit()
 
             except Exception as e:
+                gc.collect()
                 await db.rollback()
                 try:
                     result = await db.execute(select(Photo).where(Photo.id == photo_uuid))
@@ -637,8 +643,10 @@ async def _reprocess_failed_background(photo_ids: List[str], event: Event):
 
                 fname = photo.filename or ''
 
-                # Run face detection
+                # Run face detection — image_bytes freed immediately after
                 detected_faces = await run_in_threadpool(detect_and_embed, image_bytes, fname)
+                del image_bytes   # Free 50-100 MB immediately
+                gc.collect()
 
                 async with async_session_maker() as db2:
                     # Remove any old (broken) face detections for this photo
@@ -688,7 +696,11 @@ async def _reprocess_failed_background(photo_ids: List[str], event: Event):
                         photo_obj.error_message = None
                     await db2.commit()
 
+                # Small pause between photos so GC can reclaim memory
+                await asyncio.sleep(0.5)
+
             except Exception as e:
+
                 try:
                     async with async_session_maker() as dberr:
                         photo_res = await dberr.execute(select(Photo).where(Photo.id == photo_uuid))
