@@ -21,13 +21,13 @@ const StepIndicator = ({ step }) => {
           <div key={label} style={{ display: 'flex', alignItems: 'center' }}>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.35rem' }}>
               <div style={{
-                width: 36, height: 36, borderRadius: '50%',
-                background: done ? 'var(--success)' : active ? 'linear-gradient(135deg, var(--accent), var(--accent-light))' : 'var(--color-surface-2)',
-                border: `2px solid ${done ? 'var(--success)' : active ? 'var(--accent)' : 'var(--color-border)'}`,
+                width: 32, height: 32, borderRadius: '50%',
+                background: done ? 'var(--success)' : active ? 'var(--primary)' : 'var(--color-surface-2)',
+                border: `2px solid ${done ? 'var(--success)' : active ? 'var(--primary)' : 'var(--color-border)'}`,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 fontSize: '0.8rem', fontWeight: 700, color: done || active ? '#fff' : 'var(--text-muted)',
                 transition: 'all 0.35s cubic-bezier(0.4, 0, 0.2, 1)',
-                boxShadow: active ? '0 0 0 4px var(--accent-glow)' : 'none',
+                boxShadow: active ? '0 0 0 4px rgba(91, 95, 239, 0.15)' : 'none',
               }}>
                 {done ? '✓' : i + 1}
               </div>
@@ -110,7 +110,7 @@ export default function AttendeeScan() {
   // ── Results screen ──────────────────────────────────────────────────────────
   if (results) {
     return (
-      <div className="hero-bg" style={{ flex: 1, minHeight: '100vh' }}>
+      <div style={{ flex: 1, minHeight: '100vh', background: 'var(--color-bg)' }}>
         <div style={{ maxWidth: 600, margin: '0 auto', padding: '3rem 1.5rem' }}>
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
             <div className="text-center" style={{ marginBottom: '2rem' }}>
@@ -178,20 +178,12 @@ export default function AttendeeScan() {
   }
 
   return (
-    <div className="hero-bg" style={{ flex: 1, minHeight: '100vh' }}>
+    <div style={{ flex: 1, minHeight: '100vh', background: 'var(--color-bg)' }}>
       <div style={{ maxWidth: 500, margin: '0 auto', padding: '3rem 1.5rem' }}>
 
         {/* Header */}
-        <motion.div className="text-center" style={{ marginBottom: '2rem' }} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}>
-          <div style={{
-            width: 68, height: 68,
-            background: 'linear-gradient(135deg, var(--accent), var(--accent-light))',
-            borderRadius: '20px', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            margin: '0 auto 1.25rem', boxShadow: '0 8px 32px var(--accent-glow)',
-          }}>
-            <Camera size={30} color="#fff" strokeWidth={2.5} />
-          </div>
-          <h1 style={{ fontSize: '2rem', marginBottom: '0.4rem', fontWeight: 800 }}>Find My Photos</h1>
+        <motion.div className="text-center" style={{ marginBottom: '2.5rem' }} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}>
+          <h1 className="font-display" style={{ fontSize: '2.25rem', marginBottom: '0.5rem', color: 'var(--ink)' }}>Find My Photos</h1>
           <p className="text-secondary" style={{ fontSize: '0.95rem' }}>Scan your face to find every photo you appear in</p>
         </motion.div>
 
