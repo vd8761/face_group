@@ -1,19 +1,28 @@
 """
-Photos router — bulk upload, listing with status, and signed URL serving.
+Photos router — bulk upload, listing with status, retry, and signed URL serving.
 """
 import uuid
 import hashlib
 import asyncio
+import os
+import io
 from typing import List
 
+import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, status
-from sqlalchemy.ext.asyncio import AsyncSession, AsyncEngine
+from fastapi.concurrency import run_in_threadpool
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
-from ..database import get_db, engine
-from ..models import Photo, PhotoStatus, Event, Subscription, User, AuditLog, FaceDetection
+from ..database import get_db, async_session_maker
+from ..models import Photo, PhotoStatus, Event, Subscription, User, AuditLog, FaceDetection, FaceCluster
 from ..auth import require_organizer, require_attendee, get_current_user
-from ..services.storage import upload_original, upload_thumbnail, generate_presigned_url, delete_objects
+from ..services.storage import (
+    upload_original, upload_thumbnail, upload_face_crop,
+    generate_presigned_url, delete_objects, stream_object
+)
+from ..services.ml_pipeline import detect_and_embed, embedding_to_bytes
+from ..services.clustering import assign_to_cluster, create_new_cluster
 from ..schemas import PhotoResponse, PhotoListResponse, MessageResponse
 from ..config import get_settings
 
@@ -46,11 +55,6 @@ async def _process_photos_background(
     is already sent to the client. Uses its own DB session so it won't affect
     the response session.
     """
-    from ..database import async_session_maker
-    from ..services.ml_pipeline import detect_and_embed, embedding_to_bytes
-    from ..services.clustering import assign_to_cluster, create_new_cluster
-    from ..services.storage import upload_face_crop
-    from fastapi.concurrency import run_in_threadpool
 
     for pid, data_bytes, fname in zip(photo_ids, file_bytes_list, filenames):
         photo_uuid = uuid.UUID(pid)
@@ -410,12 +414,6 @@ async def _process_drive_import(
     3. Update DB row with keys + hash
     4. Run face detection + clustering
     """
-    from ..database import async_session_maker
-    from ..services.ml_pipeline import detect_and_embed, embedding_to_bytes
-    from ..services.clustering import assign_to_cluster, create_new_cluster
-    from ..services.storage import upload_face_crop
-    from fastapi.concurrency import run_in_threadpool
-    import httpx
 
     async with httpx.AsyncClient(timeout=120) as client:
         for photo_id_str, file_id, filename, mime_type in queued_items:
@@ -608,6 +606,139 @@ async def clear_event_photos(
 
     await db.commit()
     return MessageResponse(message=f"Deleted {len(photos)} photos.")
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Retry failed photos
+# ───────────────────────────────────────────────────────────────────────────────
+async def _reprocess_failed_background(photo_ids: List[str], event: Event):
+    """Re-download originals from R2 and re-run face detection for failed photos."""
+    async with async_session_maker() as db:
+        for pid in photo_ids:
+            photo_uuid = uuid.UUID(pid)
+            try:
+                res = await db.execute(select(Photo).where(Photo.id == photo_uuid))
+                photo = res.scalar_one_or_none()
+                if not photo or not photo.original_key:
+                    continue
+
+                # Mark as processing
+                photo.status = PhotoStatus.processing
+                photo.error_message = None
+                await db.commit()
+
+                # Download original from R2
+                url = generate_presigned_url(photo.original_key, expires_in=300)
+                async with httpx.AsyncClient(timeout=120) as client:
+                    resp = await client.get(url)
+                    if resp.status_code != 200:
+                        raise ValueError(f"Failed to download original from R2: {resp.status_code}")
+                    image_bytes = resp.content
+
+                fname = photo.filename or ''
+
+                # Run face detection
+                detected_faces = await run_in_threadpool(detect_and_embed, image_bytes, fname)
+
+                async with async_session_maker() as db2:
+                    # Remove any old (broken) face detections for this photo
+                    old_dets = await db2.execute(
+                        select(FaceDetection).where(FaceDetection.photo_id == photo_uuid)
+                    )
+                    for det in old_dets.scalars().all():
+                        await db2.delete(det)
+                    await db2.flush()
+
+                    for face in detected_faces:
+                        detection = FaceDetection(
+                            photo_id=photo_uuid,
+                            bbox={"x1": face.bbox[0], "y1": face.bbox[1],
+                                  "x2": face.bbox[2], "y2": face.bbox[3]},
+                            detection_confidence=face.confidence,
+                            quality_score=face.quality_score,
+                            embedding=embedding_to_bytes(face.embedding),
+                            is_low_quality=face.is_low_quality,
+                        )
+                        db2.add(detection)
+                        await db2.flush()
+
+                        if not face.is_low_quality:
+                            face_key = await upload_face_crop(
+                                face.face_crop_bytes,
+                                event.tenant_id,
+                                event.id,
+                                detection.id,
+                            )
+                            detection.face_key = face_key
+                            await db2.flush()
+
+                            cluster_id = await assign_to_cluster(
+                                detection.id, face.embedding, event.id, db2
+                            )
+                            if cluster_id is None:
+                                await create_new_cluster(
+                                    detection.id, face.embedding, event.id, db2
+                                )
+
+                    # Mark done
+                    photo_res = await db2.execute(select(Photo).where(Photo.id == photo_uuid))
+                    photo_obj = photo_res.scalar_one_or_none()
+                    if photo_obj:
+                        photo_obj.status = PhotoStatus.done
+                        photo_obj.error_message = None
+                    await db2.commit()
+
+            except Exception as e:
+                try:
+                    async with async_session_maker() as dberr:
+                        photo_res = await dberr.execute(select(Photo).where(Photo.id == photo_uuid))
+                        photo_obj = photo_res.scalar_one_or_none()
+                        if photo_obj:
+                            photo_obj.status = PhotoStatus.failed
+                            photo_obj.error_message = str(e)[:500]
+                        await dberr.commit()
+                except Exception:
+                    pass
+
+
+@router.post("/events/{event_id}/retry-failed", status_code=202)
+async def retry_failed_photos(
+    event_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(require_organizer),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Re-process all failed (or stuck) photos for an event.
+    Downloads originals from R2 and reruns face detection — no re-upload needed.
+    """
+    event = await _get_event_or_404(event_id, current_user.tenant_id, db)
+
+    result = await db.execute(
+        select(Photo).where(
+            Photo.event_id == event_id,
+            Photo.status.in_([PhotoStatus.failed, PhotoStatus.queued, PhotoStatus.processing])
+        )
+    )
+    failed_photos = result.scalars().all()
+
+    if not failed_photos:
+        return {"retrying": 0, "message": "No failed photos found."}
+
+    photo_ids = [str(p.id) for p in failed_photos]
+
+    # Reset status to queued so UI shows them as pending
+    for p in failed_photos:
+        p.status = PhotoStatus.queued
+        p.error_message = None
+    await db.commit()
+
+    background_tasks.add_task(_reprocess_failed_background, photo_ids=photo_ids, event=event)
+
+    return {
+        "retrying": len(photo_ids),
+        "message": f"Retrying {len(photo_ids)} photo(s) in the background."
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────

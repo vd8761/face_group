@@ -212,8 +212,38 @@ export default function EventManager() {
         {activeTab === 'photos' && (
           <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
             <div className="flex justify-between items-center mb-4">
-              <span className="text-sm text-muted">{photos.length} total photos</span>
-              <div className="flex items-center gap-2">
+              <span className="text-sm text-muted">
+                {photos.length} total &nbsp;·&nbsp;
+                <span style={{ color: 'var(--error)' }}>{photos.filter(p => p.status === 'failed').length} failed</span>
+                &nbsp;·&nbsp;
+                <span style={{ color: 'var(--success)' }}>{photos.filter(p => p.status === 'done').length} done</span>
+              </span>
+              <div className="flex items-center gap-2" style={{ flexWrap: 'wrap' }}>
+                {photos.some(p => p.status === 'failed' || p.status === 'queued' || p.status === 'processing') && (
+                  <button
+                    id="retry-failed-btn"
+                    className="btn btn-primary btn-sm"
+                    onClick={async () => {
+                      const btn = document.getElementById('retry-failed-btn');
+                      const orig = btn.textContent;
+                      btn.disabled = true;
+                      btn.textContent = 'Retrying…';
+                      try {
+                        const res = await api.post(`/api/photos/events/${eventId}/retry-failed`);
+                        const data = res.data;
+                        alert(`✅ ${data.message}`);
+                        setTimeout(() => { loadPhotos(); loadClusters(); }, 2000);
+                      } catch(e) {
+                        alert('Retry failed: ' + (e?.response?.data?.detail || e.message));
+                      } finally {
+                        btn.disabled = false;
+                        btn.textContent = orig;
+                      }
+                    }}
+                  >
+                    <RefreshCw size={13} /> Retry Failed ({photos.filter(p => p.status === 'failed' || p.status === 'queued' || p.status === 'processing').length})
+                  </button>
+                )}
                 <button 
                   className="btn btn-outline btn-sm" 
                   onClick={async () => {
