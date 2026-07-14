@@ -1,6 +1,6 @@
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { LogOut, LayoutDashboard, Shield, Scan } from 'lucide-react';
+import { Camera, LayoutDashboard, LogOut, Scan, Shield, UserCircle } from 'lucide-react';
 import Logo from './Logo';
 
 export default function Navbar() {
@@ -13,14 +13,18 @@ export default function Navbar() {
     navigate('/');
   };
 
+  const roleIcon = user?.role === 'super_admin'
+    ? <Shield size={14} />
+    : user?.role === 'organizer'
+      ? <Camera size={14} />
+      : <UserCircle size={14} />;
+
   return (
     <nav className="navbar">
-      {/* Logo */}
-      <Link to="/" className="navbar-logo" style={{ textDecoration: 'none' }}>
+      <Link to="/" className="navbar-logo">
         <Logo />
       </Link>
 
-      {/* Nav actions */}
       <div className="navbar-actions">
         {!user && location.pathname !== '/scan' && (
           <Link to="/scan" className="btn btn-ghost btn-sm">
@@ -41,19 +45,27 @@ export default function Navbar() {
               </Link>
             )}
             <div style={{
-              display: 'flex', alignItems: 'center', gap: '0.5rem',
-              background: 'var(--color-surface-2)', borderRadius: 'var(--radius-md)',
-              padding: '0.375rem 0.75rem', border: '1px solid var(--color-border)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              background: 'var(--color-surface-2)',
+              borderRadius: 'var(--radius-pill)',
+              padding: '0.375rem 0.75rem',
+              border: '1px solid var(--color-border)',
             }}>
               <div style={{
-                width: 26, height: 26, borderRadius: '50%',
-                background: 'linear-gradient(135deg,#7c3aed,#ec4899)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: '0.7rem', fontWeight: 700, color: '#fff',
+                width: 26,
+                height: 26,
+                borderRadius: '50%',
+                background: 'linear-gradient(135deg,var(--primary),var(--accent2))',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#fff',
               }}>
-                {user.role === 'super_admin' ? '⚡' : user.role === 'organizer' ? '📸' : '👤'}
+                {roleIcon}
               </div>
-              <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+              <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
                 {user.role === 'super_admin' ? 'Super Admin' : user.role === 'organizer' ? 'Organizer' : 'Attendee'}
               </span>
             </div>
