@@ -38,7 +38,7 @@ export default function Login() {
 
   return (
     <div style={{
-      flex: 1, display: 'flex', minHeight: '100vh',
+      flex: 1, display: 'flex', minHeight: 'calc(100vh - 64px)',
       background: 'var(--color-bg)',
     }}>
       {/* ── Left panel — branding ── */}
@@ -48,41 +48,41 @@ export default function Login() {
         transition={{ duration: 0.6 }}
         style={{
           flex: '0 0 45%', display: 'flex', flexDirection: 'column',
-          justifyContent: 'center', padding: '3rem 4rem',
-          background: 'linear-gradient(145deg, #0f172a 0%, #312e81 55%, #4f46e5 100%)',
+          justifyContent: 'center', padding: '2rem 3rem',
+          background: '#0f172a', /* Deep Slate/Midnight */
           position: 'relative', overflow: 'hidden',
         }}
         className="login-left-panel"
       >
-        {/* Decorative orbs */}
+        {/* Decorative subtle glows */}
         <div style={{
-          position: 'absolute', width: 400, height: 400, borderRadius: '50%',
-          background: 'radial-gradient(circle, rgba(6, 182, 212, 0.2) 0%, transparent 70%)',
-          top: -100, right: -100, pointerEvents: 'none',
+          position: 'absolute', width: 600, height: 600, borderRadius: '50%',
+          background: 'radial-gradient(circle, rgba(79, 70, 229, 0.15) 0%, transparent 70%)',
+          top: -200, right: -200, pointerEvents: 'none',
         }} />
         <div style={{
-          position: 'absolute', width: 300, height: 300, borderRadius: '50%',
-          background: 'radial-gradient(circle, rgba(79, 70, 229, 0.3) 0%, transparent 70%)',
-          bottom: -80, left: -80, pointerEvents: 'none',
+          position: 'absolute', width: 500, height: 500, borderRadius: '50%',
+          background: 'radial-gradient(circle, rgba(6, 182, 212, 0.1) 0%, transparent 70%)',
+          bottom: -150, left: -150, pointerEvents: 'none',
         }} />
 
         {/* Logo */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '3.5rem', position: 'relative', zIndex: 1 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '2rem', position: 'relative', zIndex: 1 }}>
           <img src={logo} alt="UrFace AI Logo" style={{ height: 40, objectFit: 'contain' }} />
         </div>
 
         {/* Headline */}
-        <div style={{ position: 'relative', zIndex: 1, marginBottom: '3rem' }}>
+        <div style={{ position: 'relative', zIndex: 1, marginBottom: '2rem' }}>
           <h2 style={{
             color: '#fff', fontSize: 'clamp(1.75rem, 3vw, 2.5rem)',
             lineHeight: 1.2, marginBottom: '1rem', fontWeight: 800,
           }}>
-            Organizer<br />
+            Welcome to<br />
             <span style={{ background: 'linear-gradient(90deg, #22d3ee, #818cf8)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>
-              Command Centre
+              UrFace AI
             </span>
           </h2>
-          <p style={{ color: 'rgba(255,255,255,0.6)', fontSize: '1rem', lineHeight: 1.6, maxWidth: 320 }}>
+          <p style={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.95rem', lineHeight: 1.5, maxWidth: 320 }}>
             Upload event photos, manage clusters, and share access codes — all in one place.
           </p>
         </div>
@@ -96,11 +96,11 @@ export default function Login() {
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: 0.3 + i * 0.12 }}
               style={{
-                display: 'flex', alignItems: 'center', gap: '0.875rem',
-                background: 'rgba(255,255,255,0.07)',
-                border: '1px solid rgba(255,255,255,0.12)',
-                borderRadius: '14px', padding: '0.875rem 1.125rem',
-                backdropFilter: 'blur(8px)',
+                display: 'flex', alignItems: 'center', gap: '0.75rem',
+                background: 'rgba(255,255,255,0.03)',
+                border: '1px solid rgba(255,255,255,0.05)',
+                borderRadius: '12px', padding: '0.75rem 1rem',
+                backdropFilter: 'blur(10px)',
               }}
             >
               <div style={{ width: 38, height: 38, borderRadius: '10px', background: 'rgba(255,255,255,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
@@ -127,9 +127,9 @@ export default function Login() {
           transition={{ duration: 0.5, delay: 0.15 }}
         >
           {/* Greeting */}
-          <div style={{ marginBottom: '2.5rem' }}>
-            <h1 style={{ fontSize: '2rem', marginBottom: '0.5rem', fontWeight: 800 }}>Welcome back 👋</h1>
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.95rem' }}>
+          <div style={{ marginBottom: '2rem' }}>
+            <h1 style={{ fontSize: '1.75rem', marginBottom: '0.375rem', fontWeight: 800 }}>Welcome back 👋</h1>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
               Sign in to manage your events and photos
             </p>
           </div>
@@ -222,19 +222,15 @@ export default function Login() {
             {/* Submit */}
             <button
               type="submit"
-              className="btn btn-primary w-full"
               disabled={loading}
+              className="btn btn-primary"
               style={{
-                justifyContent: 'center', height: '52px', fontSize: '1rem',
-                marginTop: '0.5rem', borderRadius: 'var(--radius-lg)',
-                background: 'linear-gradient(135deg, #7c3aed 0%, #ec4899 100%)',
-                boxShadow: '0 6px 28px rgba(124,58,237,0.35)',
-                letterSpacing: '0.01em',
+                width: '100%', justifyContent: 'center', padding: '0.875rem',
+                fontSize: '1rem', marginTop: '1.5rem',
               }}
             >
-              {loading
-                ? <><Loader2 size={18} style={{ animation: 'spin 1s linear infinite' }} /> Signing in…</>
-                : <>Sign In <ArrowRight size={17} /></>}
+              {loading ? <Loader2 size={18} className="animate-spin" /> : 'Sign In'}
+              {!loading && <ArrowRight size={16} />}
             </button>
           </form>
 
