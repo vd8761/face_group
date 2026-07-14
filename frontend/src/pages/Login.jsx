@@ -3,14 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Mail, Lock, Eye, EyeOff, AlertCircle, Loader2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import Constellation from '../components/Constellation';
 import Logo from '../components/Logo';
-
-const floatingFeatures = [
-  { icon: Camera, text: 'Smart Face Grouping', sub: 'Automatically detects and groups every face with industry-leading computer vision.' },
-  { icon: Shield, text: 'Privacy First',    sub: 'Your face data belongs only to you. Encrypted. Secure. Never shared.' },
-  { icon: Zap,    text: 'Instant Results',  sub: 'Discover memories instantly without manual tagging.' },
-];
 
 export default function Login() {
   const { login } = useAuth();
