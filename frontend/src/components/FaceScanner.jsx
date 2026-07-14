@@ -4,11 +4,12 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Camera, Upload, RefreshCw, Loader2 } from 'lucide-react';
 
 export default function FaceScanner({ onCapture, loading }) {
-  const [mode, setMode] = useState('webcam'); // 'webcam' | 'file'
+  const [mode, setMode] = useState('camera'); // 'camera' | 'file'
   const [capturedImage, setCapturedImage] = useState(null);
   const [cameraReady, setCameraReady] = useState(false);
   const webcamRef = useRef(null);
   const fileRef = useRef(null);
+  const cameraInputRef = useRef(null); // native front camera on mobile
 
   const capture = useCallback(() => {
     const imageSrc = webcamRef.current?.getScreenshot();
@@ -24,6 +25,11 @@ export default function FaceScanner({ onCapture, loading }) {
     if (!file) return;
     const url = URL.createObjectURL(file);
     setCapturedImage(url);
+  };
+
+  // On mobile, open the native front camera directly
+  const openFrontCamera = () => {
+    cameraInputRef.current?.click();
   };
 
   const handleScan = async () => {
@@ -43,7 +49,7 @@ export default function FaceScanner({ onCapture, loading }) {
         borderRadius: 'var(--radius-md)', padding: '4px', width: 'fit-content', gap: '4px',
       }}>
         {[
-          { id: 'webcam', label: 'Use Camera', icon: Camera },
+          { id: 'camera', label: 'Front Camera', icon: Camera },
           { id: 'file',   label: 'Upload Photo', icon: Upload },
         ].map(({ id, label, icon: Icon }) => (
           <button
@@ -61,6 +67,16 @@ export default function FaceScanner({ onCapture, loading }) {
         ))}
       </div>
 
+      {/* Hidden native camera input — opens front camera directly on mobile */}
+      <input
+        ref={cameraInputRef}
+        type="file"
+        accept="image/jpeg"
+        capture="user"
+        style={{ display: 'none' }}
+        onChange={handleFile}
+      />
+
       {/* Camera / preview */}
       <div className="webcam-wrap">
         <AnimatePresence mode="wait">
@@ -73,7 +89,7 @@ export default function FaceScanner({ onCapture, loading }) {
               animate={{ opacity: 1 }}
               style={{ width: '100%', height: '100%', objectFit: 'cover' }}
             />
-          ) : mode === 'webcam' ? (
+          ) : mode === 'camera' ? (
             <motion.div key="webcam" initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ width: '100%', height: '100%' }}>
               <Webcam
                 ref={webcamRef}
@@ -104,8 +120,14 @@ export default function FaceScanner({ onCapture, loading }) {
               onClick={() => fileRef.current?.click()}
             >
               <Upload size={40} color="var(--accent-light)" />
-              <p className="text-sm text-secondary">Click to select a photo of your face</p>
-              <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleFile} />
+              <p className="text-sm text-secondary">Click to select a JPEG photo of your face</p>
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/jpeg"
+                style={{ display: 'none' }}
+                onChange={handleFile}
+              />
             </motion.div>
           )}
         </AnimatePresence>
@@ -114,14 +136,26 @@ export default function FaceScanner({ onCapture, loading }) {
       {/* Action buttons */}
       <div className="flex gap-3">
         {!capturedImage ? (
-          mode === 'webcam' ? (
-            <button
-              className="btn btn-primary w-full"
-              onClick={capture}
-              disabled={!cameraReady}
-            >
-              <Camera size={16} /> Take Photo
-            </button>
+          mode === 'camera' ? (
+            <>
+              {/* Desktop: use webcam capture button */}
+              <button
+                className="btn btn-primary w-full"
+                onClick={capture}
+                disabled={!cameraReady}
+                style={{ display: 'block' }}
+              >
+                <Camera size={16} /> Take Photo
+              </button>
+              {/* Mobile: also show "Open Front Camera" button that triggers native camera */}
+              <button
+                className="btn btn-ghost"
+                onClick={openFrontCamera}
+                title="Open phone front camera"
+              >
+                <Camera size={16} /> Phone Camera
+              </button>
+            </>
           ) : null
         ) : (
           <>

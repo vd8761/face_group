@@ -1,4 +1,4 @@
-export default function Logo({ light = false, style = {}, size = 'md' }) {
+export default function Logo({ light = false, style = {}, size = 'md', align = 'left' }) {
   const heights = { sm: 36, md: 48, lg: 64 };
   const h = heights[size] || heights.md;
   
@@ -18,7 +18,7 @@ export default function Logo({ light = false, style = {}, size = 'md' }) {
           height: h, 
           width: 'auto',
           transform: 'scale(1.8)',
-          transformOrigin: 'left center',
+          transformOrigin: align === 'center' ? 'center center' : 'left center',
           filter: light ? 'brightness(0) invert(1)' : 'none',
           mixBlendMode: light ? 'screen' : 'multiply',
           transition: 'filter 0.2s',

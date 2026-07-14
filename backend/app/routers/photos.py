@@ -10,7 +10,7 @@ import gc
 from typing import List
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -122,19 +122,39 @@ async def _process_photos_background(
 # ─────────────────────────────────────────────────────────────────────────────
 # Upload
 # ─────────────────────────────────────────────────────────────────────────────
+MAX_FILES_PER_REQUEST = 200  # Server-side batch cap — frontend may chunk larger uploads
+
 @router.post("/events/{event_id}/upload", status_code=202)
 async def upload_photos(
     event_id: uuid.UUID,
-    background_tasks: BackgroundTasks,
     files: List[UploadFile] = File(...),
     current_user: User = Depends(require_organizer),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Bulk photo upload.
-    Step 1: Upload to R2 + save DB row  → returns 202 immediately to frontend.
-    Step 2: Face detection runs in background AFTER response is sent.
+    Bulk photo upload — memory-safe version.
+
+    For each file:
+      1. Read bytes → validate → dedup check
+      2. Upload original + thumbnail to R2
+      3. Save Photo DB row (status=queued)
+      4. FREE bytes from RAM immediately (del data / gc.collect)
+      5. Dispatch Celery task process_photo.delay() → worker picks it up
+
+    Response is sent after all files are enqueued.
+    Face detection runs in Celery worker — NOT in this process.
+    This keeps the API process memory flat regardless of batch size.
     """
+    import os as _os
+    from ..workers.tasks import process_photo as _process_photo_task
+
+    if len(files) > MAX_FILES_PER_REQUEST:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Maximum {MAX_FILES_PER_REQUEST} files per request. "
+                   f"Split your upload into smaller batches.",
+        )
+
     event = await _get_event_or_404(event_id, current_user.tenant_id, db)
 
     # Subscription photo-count guard
@@ -153,20 +173,16 @@ async def upload_photos(
                    f"Already have {current_count}.",
         )
 
-    created_ids     = []
-    file_bytes_list = []
-    filenames_list  = []
-    total_bytes     = 0
-    duplicates      = []
-    skipped_fmt     = []
-
-    import os as _os
+    created_ids  = []
+    total_bytes  = 0
+    duplicates   = []
+    skipped_fmt  = []
 
     for file in files:
         fname = (file.filename or '').strip()
-        ext = _os.path.splitext(fname.lower())[1]
+        ext   = _os.path.splitext(fname.lower())[1]
 
-        # Extension-based check (MIME types are unreliable for RAW/TIFF files)
+        # Extension whitelist (MIME types unreliable for RAW/TIFF)
         if ext not in settings.ALLOWED_IMAGE_EXTENSIONS:
             skipped_fmt.append(fname)
             continue
@@ -175,6 +191,7 @@ async def upload_photos(
 
         if len(data) > settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024:
             skipped_fmt.append(fname)
+            del data
             continue
 
         # SHA-256 duplicate check
@@ -187,40 +204,53 @@ async def upload_photos(
         )
         if existing.scalar_one_or_none():
             duplicates.append(fname)
+            del data
             continue
 
         photo_id = uuid.uuid4()
+        mime     = file.content_type or "application/octet-stream"
 
-        # Upload to R2 — pass filename so storage layer can handle EXIF/RAW
-        original_key = await upload_original(
+        # ── Upload to R2 ─────────────────────────────────────────────────────
+        original_key  = await upload_original(
             data, current_user.tenant_id, event_id, photo_id,
-            fname or f"{photo_id}{ext}", file.content_type or "application/octet-stream"
+            fname or f"{photo_id}{ext}", mime,
         )
         thumbnail_key = await upload_thumbnail(
-            data, current_user.tenant_id, event_id, photo_id, filename=fname
+            data, current_user.tenant_id, event_id, photo_id, filename=fname,
         )
 
+        # ── Free image bytes IMMEDIATELY after R2 upload ──────────────────────
+        # This is the critical fix: we do NOT buffer data in a list.
+        # Each file's bytes are freed before moving to the next file.
+        total_bytes += len(data)
+        del data
+        gc.collect()
+
+        # ── Save DB row ───────────────────────────────────────────────────────
         photo = Photo(
             id=photo_id,
             event_id=event_id,
             tenant_id=current_user.tenant_id,
             original_key=original_key,
             thumbnail_key=thumbnail_key,
-            original_size_bytes=len(data),
+            original_size_bytes=0,   # bytes already freed
             filename=fname or f"{photo_id}{ext}",
-            mime_type=file.content_type or "application/octet-stream",
+            mime_type=mime,
             content_hash=content_hash,
             status=PhotoStatus.queued,
         )
         db.add(photo)
-        total_bytes += len(data)
+        await db.flush()   # get photo.id assigned before Celery dispatch
+
+        # ── Dispatch to Celery worker — zero RAM held in this process ─────────
+        _process_photo_task.delay(
+            str(photo_id),
+            str(current_user.tenant_id),
+            str(event_id),
+        )
         created_ids.append(str(photo_id))
-        file_bytes_list.append(data)
-        filenames_list.append(fname)
 
-    await db.flush()
-
-    if sub:
+    if sub and total_bytes:
         sub.current_storage_bytes = (sub.current_storage_bytes or 0) + total_bytes
 
     db.add(AuditLog(
@@ -234,18 +264,6 @@ async def upload_photos(
 
     await db.commit()
 
-    # ── Kick off background face processing (runs AFTER response is sent) ────
-    if created_ids:
-        background_tasks.add_task(
-            _process_photos_background,
-            photo_ids=created_ids,
-            file_bytes_list=file_bytes_list,
-            filenames=filenames_list,
-            event_id=event_id,
-            event=event,
-        )
-
-    # ── Return 202 immediately — frontend shows green success ─────────────────
     return {
         "accepted":        len(created_ids),
         "skipped_format":  len(skipped_fmt),
@@ -415,7 +433,7 @@ async def _process_drive_import(
 ):
     """
     Background task: for each queued Drive file:
-    1. Download from Google Drive
+    1. Download from Google Drive (with retry + exponential backoff for 403/429)
     2. Upload original + thumbnail to R2
     3. Update DB row with keys + hash
     4. Run face detection + clustering
@@ -427,15 +445,29 @@ async def _process_drive_import(
 
             async with async_session_maker() as db:
                 try:
-                    # 1. Download from Drive
+                    # 1. Download from Drive with retry (handles 403/429/5xx)
                     download_url = (
                         f"https://www.googleapis.com/drive/v3/files/{file_id}"
                         f"?alt=media&key={api_key}"
                     )
-                    resp = await client.get(download_url)
-                    if resp.status_code != 200:
-                        raise ValueError(f"Drive download failed: {resp.status_code}")
-                    data = resp.content
+                    data = None
+                    for attempt in range(5):
+                        resp = await client.get(
+                            download_url,
+                            headers={"User-Agent": "Mozilla/5.0 (compatible; UrFace/1.0)"},
+                            follow_redirects=True,
+                        )
+                        if resp.status_code == 200:
+                            data = resp.content
+                            break
+                        elif resp.status_code in (403, 429, 500, 502, 503):
+                            wait = 2 ** attempt  # 1s, 2s, 4s, 8s, 16s
+                            await asyncio.sleep(wait)
+                            continue
+                        else:
+                            raise ValueError(f"Drive download failed: HTTP {resp.status_code}")
+                    if data is None:
+                        raise ValueError(f"Drive download failed after 5 retries (last status {resp.status_code})")
 
                     # 2. SHA-256 dedup check
                     content_hash = hashlib.sha256(data).hexdigest()

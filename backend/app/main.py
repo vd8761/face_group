@@ -3,6 +3,7 @@ FastAPI application entry point.
 Assembles all routers, middleware, CORS, startup seeding, and health check.
 """
 import uuid
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -46,7 +47,18 @@ async def seed_super_admin():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
+    # ── Sentry error tracking ──────────────────────────────────────────────
+    sentry_dsn = os.getenv("SENTRY_DSN", "")
+    if sentry_dsn:
+        import sentry_sdk
+        sentry_sdk.init(
+            dsn=sentry_dsn,
+            traces_sample_rate=0.1,   # 10% of requests traced
+            profiles_sample_rate=0.1,
+        )
+        print("✅ Sentry error tracking enabled")
+
+    # ── DB + seed ──────────────────────────────────────────────────────
     await init_db()
     await seed_super_admin()
     yield
@@ -58,7 +70,7 @@ async def lifespan(app: FastAPI):
 # ─────────────────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="PhotoGroup API",
-    description="AI-powered face grouping for event photos",
+    description="Event photo management and face grouping",
     version=settings.APP_VERSION,
     docs_url="/api/docs",
     redoc_url="/api/redoc",

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Mail, Lock, Eye, EyeOff, AlertCircle, Loader2, ArrowRight, Camera, Shield, Zap } from 'lucide-react';
+import { Mail, Lock, Eye, EyeOff, AlertCircle, Loader2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import Constellation from '../components/Constellation';
 import Logo from '../components/Logo';
@@ -62,7 +62,7 @@ export default function Login() {
       >
         {/* Logo & Greeting */}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: '2rem', textAlign: 'center' }}>
-          <Logo style={{ marginBottom: '1rem', alignSelf: 'flex-start' }} />
+          <Logo align="center" style={{ marginBottom: '1rem' }} />
           <h1 className="font-display" style={{ fontSize: '1.75rem', marginBottom: '0.5rem', color: 'var(--ink)' }}>Sign in</h1>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.95rem' }}>
             Continue to Organizer Dashboard

@@ -1,12 +1,28 @@
 """
 HDBSCAN-based face clustering service.
 All clustering is event-scoped — embeddings from different events never mix.
+
+Deadlock-safe design
+--------------------
+The original code caused PostgreSQL deadlocks because multiple Celery workers
+would simultaneously:
+  1. SELECT all clusters for the event (shared read lock)
+  2. UPDATE the winning cluster's centroid (exclusive write lock)
+
+When two workers pick the same "best cluster" the UPDATE locks collide →
+DeadlockDetectedError.
+
+Fix: use SELECT ... FOR UPDATE SKIP LOCKED to acquire an exclusive row lock
+before reading the centroid and writing back.  Workers that can't get the
+lock immediately skip that cluster and create a new one instead — ensuring
+forward progress at all times with zero blocking.
 """
 import uuid
 import numpy as np
 from typing import List, Optional, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update
+from sqlalchemy import select, update, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from ..models import FaceDetection, FaceCluster
 from .ml_pipeline import bytes_to_embedding, embedding_to_bytes, cosine_distance
@@ -16,7 +32,7 @@ settings = get_settings()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Incremental matching — assign new face to existing cluster or flag for recluster
+# Incremental matching — deadlock-safe version
 # ─────────────────────────────────────────────────────────────────────────────
 async def assign_to_cluster(
     detection_id: uuid.UUID,
@@ -26,52 +42,67 @@ async def assign_to_cluster(
 ) -> Optional[uuid.UUID]:
     """
     Try to assign a new face embedding to an existing cluster.
+
+    Uses FOR UPDATE SKIP LOCKED so concurrent workers never block each other:
+    - Each worker locks only the rows it actually wins.
+    - If a row is already locked by another worker, it is skipped.
+    - If no unlocked match is found, returns None → caller creates a new cluster.
+
     Returns the matched cluster_id, or None if no confident match found.
     """
+    # Read all cluster centroids (read-only snapshot, no lock yet)
     result = await db.execute(
-        select(FaceCluster).where(FaceCluster.event_id == event_id)
+        select(FaceCluster.id, FaceCluster.centroid_embedding, FaceCluster.member_count)
+        .where(FaceCluster.event_id == event_id)
     )
-    clusters = result.scalars().all()
+    rows = result.all()
 
-    if not clusters:
+    if not rows:
         return None
 
-    best_cluster_id = None
+    # Find best match by cosine distance
+    best_id = None
     best_distance = float("inf")
-
-    for cluster in clusters:
-        centroid = bytes_to_embedding(cluster.centroid_embedding)
+    for row_id, centroid_bytes, _ in rows:
+        centroid = bytes_to_embedding(centroid_bytes)
         dist = cosine_distance(embedding, centroid)
         if dist < best_distance:
             best_distance = dist
-            best_cluster_id = cluster.id
+            best_id = row_id
 
-    if best_distance <= settings.COSINE_MATCH_THRESHOLD:
-        # Update cluster centroid (running mean)
-        cluster_result = await db.execute(
-            select(FaceCluster).where(FaceCluster.id == best_cluster_id)
-        )
-        cluster = cluster_result.scalar_one()
-        old_centroid = bytes_to_embedding(cluster.centroid_embedding)
-        n = cluster.member_count
-        new_centroid = ((old_centroid * n) + embedding) / (n + 1)
-        # Re-normalise
-        norm = np.linalg.norm(new_centroid)
-        if norm > 0:
-            new_centroid = new_centroid / norm
+    if best_distance > settings.COSINE_MATCH_THRESHOLD:
+        return None   # No confident match
 
-        cluster.centroid_embedding = embedding_to_bytes(new_centroid)
-        cluster.member_count = n + 1
+    # Try to lock that specific row exclusively (SKIP LOCKED = no deadlock)
+    lock_result = await db.execute(
+        select(FaceCluster)
+        .where(FaceCluster.id == best_id)
+        .with_for_update(skip_locked=True)
+    )
+    cluster = lock_result.scalar_one_or_none()
 
-        # Link detection to cluster
-        det_result = await db.execute(
-            select(FaceDetection).where(FaceDetection.id == detection_id)
-        )
-        detection = det_result.scalar_one()
-        detection.cluster_id = best_cluster_id
-        return best_cluster_id
+    if cluster is None:
+        # Another worker grabbed this cluster — bail out, let caller create new
+        return None
 
-    return None
+    # Safe to update — we hold the exclusive row lock
+    old_centroid = bytes_to_embedding(cluster.centroid_embedding)
+    n = cluster.member_count
+    new_centroid = ((old_centroid * n) + embedding) / (n + 1)
+    norm = np.linalg.norm(new_centroid)
+    if norm > 0:
+        new_centroid = new_centroid / norm
+
+    cluster.centroid_embedding = embedding_to_bytes(new_centroid)
+    cluster.member_count = n + 1
+
+    # Link detection → cluster
+    det_result = await db.execute(
+        select(FaceDetection).where(FaceDetection.id == detection_id)
+    )
+    detection = det_result.scalar_one()
+    detection.cluster_id = best_id
+    return best_id
 
 
 async def create_new_cluster(
@@ -129,7 +160,7 @@ async def recluster_event(event_id: uuid.UUID, db: AsyncSession) -> int:
     clusterer = hdbscan.HDBSCAN(
         min_cluster_size=settings.HDBSCAN_MIN_CLUSTER_SIZE,
         min_samples=1,
-        metric="euclidean",       # Works on L2-normalised embeddings
+        metric="euclidean",
         cluster_selection_method="eom",
     )
     labels = clusterer.fit_predict(embeddings)
@@ -150,7 +181,6 @@ async def recluster_event(event_id: uuid.UUID, db: AsyncSession) -> int:
             continue  # Noise — leave unclustered
 
         if label not in label_to_cluster:
-            # Create cluster with this face as seed
             cluster = FaceCluster(
                 event_id=event_id,
                 centroid_embedding=embedding_to_bytes(embeddings[idx]),
@@ -167,7 +197,7 @@ async def recluster_event(event_id: uuid.UUID, db: AsyncSession) -> int:
         detection = det_result.scalar_one()
         detection.cluster_id = cluster_id
 
-    # Recompute centroids
+    # Recompute centroids in bulk
     for label, cluster_id in label_to_cluster.items():
         mask = labels == label
         centroid = embeddings[mask].mean(axis=0)
@@ -237,7 +267,6 @@ async def merge_clusters(
     if source.event_id != target.event_id:
         raise ValueError("Cannot merge clusters from different events.")
 
-    # Weighted centroid
     src_emb = bytes_to_embedding(source.centroid_embedding)
     tgt_emb = bytes_to_embedding(target.centroid_embedding)
     n_src, n_tgt = source.member_count, target.member_count
@@ -249,7 +278,6 @@ async def merge_clusters(
     target.centroid_embedding = embedding_to_bytes(new_centroid)
     target.member_count = n_src + n_tgt
 
-    # Re-assign source detections to target
     await db.execute(
         update(FaceDetection)
         .where(FaceDetection.cluster_id == source_id)

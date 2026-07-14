@@ -87,53 +87,18 @@ class Settings(BaseSettings):
     # ── File size limits ──────────────────────────────────────────────────────
     MAX_UPLOAD_SIZE_MB: int = 100  # Per-photo max (RAW files can be 50-80MB)
 
-    # Extension-based allowlist — MIME types are unreliable for RAW files.
-    # Browsers often report RAW/TIFF as application/octet-stream.
+    # MIME types accepted for selfie scans (faces.py + public.py)
+    # Broad format support — attendees may use phone cameras with various formats
+    ALLOWED_IMAGE_TYPES: set = {
+        "image/jpeg", "image/jpg", "image/png",
+        "image/webp", "image/heic", "image/heif",
+    }
+
+
+    # Extension-based allowlist for event photo uploads (Manual + Google Drive).
+    # JPEG/JPG only — simplifies processing and reduces storage costs.
     ALLOWED_IMAGE_EXTENSIONS: set = {
-        # Standard web formats
-        ".jpg", ".jpeg", ".jpe", ".jfif",   # JPEG variants
-        ".png",                               # PNG
-        ".webp",                              # WebP
-        ".gif",                               # GIF (single-frame treated as still)
-        ".bmp",                               # Bitmap
-        ".tif", ".tiff",                      # TIFF (used by studios)
-        # Apple / Mobile
-        ".heic", ".heif",                     # iPhone HEIC
-        ".avif",                              # AVIF (modern mobile)
-        # Sony
-        ".arw", ".srf", ".sr2",
-        # Canon
-        ".cr2", ".cr3", ".crw",
-        # Nikon
-        ".nef", ".nrw",
-        # Adobe / Universal RAW
-        ".dng",
-        # Fujifilm
-        ".raf",
-        # Olympus / OM System
-        ".orf",
-        # Panasonic
-        ".rw2",
-        # Pentax / Ricoh
-        ".pef", ".ptx",
-        # Samsung
-        ".srw",
-        # Hasselblad
-        ".3fr", ".fff",
-        # Phase One
-        ".iiq",
-        # Epson
-        ".erf",
-        # Minolta / Konica-Minolta
-        ".mrw",
-        # Sigma
-        ".x3f",
-        # Kodak
-        ".k25", ".kdc", ".dcr",
-        # Leica
-        ".rwl", ".dng",
-        # Mamiya
-        ".mef", ".mfw", ".mos",
+        ".jpg", ".jpeg", ".jpe", ".jfif",
     }
 
     # ── CORS ──────────────────────────────────────────────────────────────────

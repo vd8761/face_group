@@ -16,7 +16,6 @@ Uses the buffalo_l model pack (RetinaFace detector + ArcFace embedder).
 import io
 import os
 import gc
-import asyncio
 import numpy as np
 from typing import List
 from dataclasses import dataclass
@@ -33,17 +32,10 @@ os.environ.setdefault("INSIGHTFACE_HOME", "/tmp/insightface_cache")
 # 1920 px is plenty for detecting faces; 4096 px wastes ~4× the RAM.
 MAX_PROCESS_DIM = 1920
 
-# Only ONE face-detection job runs at a time.
-# InsightFace buffalo_l needs ~1.5 GB; running two at once = OOM.
-_DETECT_SEMAPHORE: asyncio.Semaphore | None = None
-
-def _get_semaphore() -> asyncio.Semaphore:
-    global _DETECT_SEMAPHORE
-    if _DETECT_SEMAPHORE is None:
-        # 4 GB Pro instance can safely run 2 concurrent detections
-        # (1,500 MB model × 2 + ~400 MB headroom = ~3,400 MB)
-        _DETECT_SEMAPHORE = asyncio.Semaphore(2)
-    return _DETECT_SEMAPHORE
+# Memory safety: Celery worker_concurrency=2 means two SEPARATE processes
+# each loading the model independently. No shared memory, no semaphore needed.
+# Each worker process uses ~1.5 GB (model) + ~200 MB (buffers) = ~1.7 GB
+# Two workers = ~3.4 GB — safe on 4 GB Pro.
 
 # ── Format sets ──────────────────────────────────────────────────────────────
 RAW_EXTENSIONS = {

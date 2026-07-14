@@ -22,7 +22,9 @@ def run_async(coro):
 @shared_task(
     bind=True,
     max_retries=3,
-    default_retry_delay=30,
+    default_retry_delay=15,      # Match celery_app.py setting
+    time_limit=300,              # Hard kill after 5 min (stuck tasks)
+    soft_time_limit=240,         # Soft warning at 4 min
     name="app.workers.tasks.process_photo",
 )
 def process_photo(self, photo_id: str, tenant_id: str, event_id: str):
@@ -94,28 +96,62 @@ def process_photo(self, photo_id: str, tenant_id: str, event_id: str):
                 await db.commit()
                 logger.info(f"Photo {photo_id} processed successfully")
 
+                # ── Auto-recluster when ALL photos in this event are done ──────
+                # Check if any photos are still queued or processing.
+                # If this was the last one, kick off a full HDBSCAN recluster
+                # to merge any duplicate clusters created by concurrent workers.
+                from sqlalchemy import func as sa_func
+                pending_count_result = await db.execute(
+                    select(sa_func.count(Photo.id)).where(
+                        Photo.event_id == uuid.UUID(event_id),
+                        Photo.status.in_([PhotoStatus.queued, PhotoStatus.processing]),
+                    )
+                )
+                pending = pending_count_result.scalar() or 0
+                if pending == 0:
+                    logger.info(f"Event {event_id}: all photos done — triggering auto-recluster")
+                    recluster_event_task.apply_async(
+                        args=[event_id],
+                        countdown=5,   # 5s delay so any in-flight commits settle
+                    )
+
+
             except Exception as exc:
                 await db.rollback()
-                # Update photo status to failed
-                try:
-                    async with AsyncSessionLocal() as db2:
-                        result = await db2.execute(
-                            select(Photo).where(Photo.id == uuid.UUID(photo_id))
-                        )
-                        photo = result.scalar_one_or_none()
-                        if photo:
-                            photo.status = PhotoStatus.failed
-                            photo.error_message = str(exc)[:500]
-                            await db2.commit()
-                except Exception:
-                    pass
+                # Re-raise so the outer handler can decide retry vs fail
                 raise exc
 
     try:
         run_async(_run())
     except Exception as exc:
-        logger.error(f"Photo {photo_id} processing failed: {exc}")
-        raise self.retry(exc=exc)
+        exc_str = str(exc)
+        is_deadlock = "DeadlockDetected" in exc_str or "deadlock" in exc_str.lower()
+        is_retriable = is_deadlock or "connection" in exc_str.lower()
+
+        if is_retriable and self.request.retries < self.max_retries:
+            # Deadlocks: retry immediately (0-2s jitter) — no need to wait 15s
+            countdown = 1 if is_deadlock else 15
+            logger.warning(f"Photo {photo_id} retriable error (attempt {self.request.retries+1}): {exc_str[:120]}")
+            raise self.retry(exc=exc, countdown=countdown)
+
+        # All retries exhausted — mark as permanently failed
+        logger.error(f"Photo {photo_id} permanently failed: {exc_str[:200]}")
+        try:
+            async def _mark_failed():
+                from ..database import AsyncSessionLocal
+                from ..models import Photo, PhotoStatus
+                from sqlalchemy import select
+                async with AsyncSessionLocal() as db2:
+                    result = await db2.execute(select(Photo).where(Photo.id == uuid.UUID(photo_id)))
+                    photo = result.scalar_one_or_none()
+                    if photo:
+                        photo.status = PhotoStatus.failed
+                        photo.error_message = exc_str[:500]
+                        await db2.commit()
+            run_async(_mark_failed())
+        except Exception:
+            pass
+        raise exc
 
 
 @shared_task(

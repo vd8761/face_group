@@ -1,11 +1,11 @@
 services:
-  # ── FastAPI Web Service ────────────────────────────────────────────────────
+  # ── FastAPI Web Service + Celery Worker (same container) ──────────────────
   - type: web
     name: photogroup-api
     runtime: docker
     dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend
-    plan: starter            # Free tier on Render
+    plan: pro                # 4 GB RAM / 2 CPU — required for InsightFace
     envVars:
       - key: SECRET_KEY
         generateValue: true
@@ -24,10 +24,13 @@ services:
       - key: R2_BUCKET_NAME
         value: face-group
       - key: REDIS_URL
-        sync: false          # Paste your Upstash Redis URL
+        sync: false          # Paste your Upstash Redis URL (Pay as You Go)
+      - key: GOOGLE_API_KEY
+        sync: false          # Google Drive API key for folder imports
+      - key: SENTRY_DSN
+        sync: false          # Optional: Sentry error tracking DSN
       - key: CORS_ORIGINS
         value: '["https://your-app.vercel.app"]'
       - key: DEBUG
         value: "false"
     healthCheckPath: /api/health
-

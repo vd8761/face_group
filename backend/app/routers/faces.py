@@ -88,7 +88,7 @@ async def selfie_scan(
 
     # Read selfie image
     if selfie.content_type not in settings.ALLOWED_IMAGE_TYPES:
-        raise HTTPException(status_code=422, detail="Unsupported image format")
+        raise HTTPException(status_code=422, detail="Please upload a JPEG photo for your selfie.")
 
     image_bytes = await selfie.read()
     if len(image_bytes) > settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024:
