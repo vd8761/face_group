@@ -1,7 +1,7 @@
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { LogOut, LayoutDashboard, Shield, Scan } from 'lucide-react';
-import logo from '../assets/logo.png';
+import Logo from './Logo';
 
 export default function Navbar() {
   const { user, logout, isRole } = useAuth();
@@ -16,8 +16,8 @@ export default function Navbar() {
   return (
     <nav className="navbar">
       {/* Logo */}
-      <Link to="/" className="navbar-logo" style={{ gap: '0.75rem' }}>
-        <img src={logo} alt="UrFace AI Logo" style={{ height: 36, objectFit: 'contain' }} />
+      <Link to="/" className="navbar-logo" style={{ textDecoration: 'none' }}>
+        <Logo />
       </Link>
 
       {/* Nav actions */}

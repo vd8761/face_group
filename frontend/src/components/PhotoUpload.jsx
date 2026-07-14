@@ -187,7 +187,7 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
 
       {/* ── Mode switcher tabs ── */}
-      <div style={{ display: 'flex', gap: '0.5rem', background: 'var(--color-surface-2)', padding: '0.25rem', borderRadius: 'var(--radius-lg)', width: 'fit-content', margin: '0 0 1rem 0' }}>
+      <div style={{ display: 'flex', gap: '0.25rem', background: 'var(--color-surface-2)', padding: '0.35rem', borderRadius: 'var(--radius-pill)', width: 'fit-content', margin: '0 0 1.5rem 0', border: '1px solid var(--border-light)' }}>
         {[
           { id: 'local', icon: <Upload size={14}/>, label: 'Upload from Device' },
           { id: 'drive', icon: <HardDriveDownload size={14}/>, label: 'Import from Google Drive' },
@@ -197,16 +197,16 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
             onClick={() => { setUploadMode(tab.id); setDriveResult(null); setDriveError(''); }}
             style={{
               display: 'flex', alignItems: 'center', gap: '0.4rem',
-              padding: '0.55rem 1rem',
-              background: uploadMode === tab.id ? 'var(--color-surface)' : 'transparent',
+              padding: '0.6rem 1.25rem',
+              background: uploadMode === tab.id ? '#ffffff' : 'transparent',
               border: 'none',
-              borderRadius: 'var(--radius-md)',
-              boxShadow: uploadMode === tab.id ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
-              color: uploadMode === tab.id ? 'var(--color-text)' : 'var(--color-muted)',
-              fontWeight: uploadMode === tab.id ? 600 : 400,
+              borderRadius: 'var(--radius-pill)',
+              boxShadow: uploadMode === tab.id ? '0 2px 8px rgba(0,0,0,0.06), 0 0 0 1px var(--border-light)' : 'none',
+              color: uploadMode === tab.id ? 'var(--text-main)' : 'var(--text-muted)',
+              fontWeight: uploadMode === tab.id ? 700 : 500,
               fontSize: '0.85rem',
               cursor: 'pointer',
-              transition: 'all 0.2s',
+              transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
             }}
           >{tab.icon}{tab.label}</button>
         ))}
@@ -278,8 +278,8 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
             <button
               onClick={handleDriveImport}
               disabled={!driveUrl.trim() || driveImporting}
-              className="btn btn-primary"
-              style={{ whiteSpace: 'nowrap', minWidth: '140px', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+              className="btn btn-primary btn-pill"
+              style={{ whiteSpace: 'nowrap', minWidth: '140px', display: 'flex', alignItems: 'center', gap: '0.4rem', boxShadow: '0 4px 12px rgba(91, 95, 239, 0.2)' }}
             >
               {driveImporting
                 ? <><Loader2 size={14} className="spin"/>Importing…</>
@@ -422,10 +422,10 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
       {uploadMode === 'local' && !done && (
         <div
           style={{
-            border: `2px dashed ${dragOver ? 'var(--accent)' : 'var(--color-border)'}`,
-            borderRadius: 'var(--radius-xl)',
-            background: dragOver ? 'rgba(124,58,237,0.04)' : 'var(--color-surface-2)',
-            padding: '3rem 2rem',
+            border: `1.5px dashed ${dragOver ? 'var(--primary)' : 'var(--border-dark)'}`,
+            borderRadius: 'var(--radius-md)',
+            background: dragOver ? 'rgba(91,95,239,0.04)' : '#fafafa',
+            padding: '5rem 2rem',
             cursor: 'pointer',
             transition: 'all 0.2s',
             textAlign: 'center',
@@ -441,22 +441,12 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
             style={{ display: 'none' }}
             onChange={(e) => addFiles(e.target.files)}
           />
-          <motion.div animate={{ y: dragOver ? -6 : 0 }} transition={{ type: 'spring', stiffness: 300 }}>
-            <div style={{
-              width: 60, height: 60,
-              background: dragOver ? 'var(--accent)' : 'var(--accent-soft)',
-              borderRadius: '16px', display: 'flex', alignItems: 'center',
-              justifyContent: 'center', margin: '0 auto 1rem', transition: 'all 0.2s',
-            }}>
-              <CloudUpload size={26} color={dragOver ? '#fff' : 'var(--accent-light)'} />
-            </div>
-            <p style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.375rem' }}>
-              Drop photos here or <span style={{ color: 'var(--accent-light)' }}>browse</span>
-            </p>
-            <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
-              JPEG · PNG · HEIC · WEBP &nbsp;·&nbsp; Max 25 MB each &nbsp;·&nbsp; Batches of {BATCH_SIZE}
-            </p>
-          </motion.div>
+          <h3 style={{ margin: '0 0 0.6rem 0', fontSize: '1.15rem', color: 'var(--text-main)', fontWeight: 700 }}>
+            Drop photos here or browse
+          </h3>
+          <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+            JPEG · PNG · HEIC · WEBP &nbsp;·&nbsp; Max 25 MB each &nbsp;·&nbsp; Batches of {BATCH_SIZE}
+          </p>
         </div>
       )}
 
@@ -758,9 +748,10 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
       {!done && (
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
           <button
-            className="btn btn-primary"
+            className="btn btn-primary btn-pill"
             disabled={!files.length || uploading}
             onClick={handleUpload}
+            style={{ padding: '0.65rem 1.5rem', boxShadow: '0 4px 12px rgba(91, 95, 239, 0.2)' }}
           >
             {uploading
               ? <><Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> Uploading…</>

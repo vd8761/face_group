@@ -194,10 +194,11 @@ export default function EventManager() {
               onClick={() => setActiveTab(id)}
               style={{
                 background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
-                padding: '0.625rem 1rem', fontWeight: 600, fontSize: '0.875rem',
-                color: activeTab === id ? 'var(--accent-light)' : 'var(--text-muted)',
-                borderBottom: `2px solid ${activeTab === id ? 'var(--accent-light)' : 'transparent'}`,
+                padding: '0.625rem 1rem', fontWeight: 700, fontSize: '0.9rem',
+                color: activeTab === id ? 'var(--primary)' : 'var(--text-muted)',
+                borderBottom: `2px solid ${activeTab === id ? 'var(--primary)' : 'transparent'}`,
                 marginBottom: '-1px', display: 'flex', alignItems: 'center', gap: '0.4rem',
+                transition: 'all 0.2s ease'
               }}
             >
               <Icon size={14} /> {label}

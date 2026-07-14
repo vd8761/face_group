@@ -52,48 +52,51 @@ export default function OrganizerDashboard() {
   const totalDone     = events.reduce((s, e) => s + (e.processed_count || 0), 0);
 
   return (
-    <div style={{ flex: 1, background: 'var(--color-bg)', minHeight: '100vh' }}>
+    <div style={{ flex: 1, background: 'var(--color-bg)' }}>
       <div style={{
-        background: 'linear-gradient(135deg, rgba(79, 70, 229, 0.08) 0%, rgba(6, 182, 212, 0.06) 100%)',
-        borderBottom: '1px solid var(--color-border)',
-        padding: '2rem 0',
+        background: 'var(--ink)',
+        position: 'relative',
+        overflow: 'hidden',
+        padding: '3rem 0 3.5rem',
+        borderBottom: '1px solid var(--border-dark)',
       }}>
-        <div className="container">
-          <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem' }}>
+        {/* Subtle glow effect */}
+        <div style={{
+          position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)',
+          width: '100%', maxWidth: 800, height: '100%',
+          background: 'radial-gradient(circle at top, rgba(91, 95, 239, 0.15) 0%, transparent 70%)',
+          pointerEvents: 'none'
+        }} />
+        
+        <div className="container" style={{ position: 'relative', zIndex: 1 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem' }}>
             <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem', marginBottom: '0.375rem' }}>
-                <div style={{
-                  width: 36, height: 36, borderRadius: '10px',
-                  background: 'linear-gradient(135deg,#4f46e5,#06b6d4)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                }}>
-                  <Camera size={18} color="#fff" />
-                </div>
-                <h2 style={{ margin: 0, fontSize: '1.75rem' }}>My Events</h2>
-              </div>
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', margin: 0 }}>
-                Manage photo events, uploads, and face recognition clusters
+              <h2 className="font-display" style={{ margin: 0, fontSize: '2rem', color: '#fff', marginBottom: '0.25rem' }}>
+                My Events
+              </h2>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.95rem', margin: 0 }}>
+                Manage your photo galleries, uploads, and AI face clusters.
               </p>
             </div>
             <button
-              className="btn btn-primary"
+              className="btn btn-primary btn-pill"
               onClick={() => setShowCreate(true)}
-              style={{ gap: '0.5rem', padding: '0.75rem 1.5rem', fontSize: '0.95rem' }}
+              style={{ gap: '0.5rem', padding: '0.75rem 1.5rem', fontSize: '0.95rem', boxShadow: '0 4px 12px rgba(91, 95, 239, 0.2)' }}
             >
-              <Plus size={17} /> New Event
+              <Plus size={17} /> Create New Event
             </button>
           </div>
         </div>
       </div>
 
-      <div className="container" style={{ padding: '2rem 1.5rem' }}>
+      <div className="container" style={{ padding: '0 1.5rem 3rem', marginTop: '-1.5rem', position: 'relative', zIndex: 2 }}>
         {/* Stats row */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '2rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '2.5rem' }}>
           {[
-            { icon: Calendar,   label: 'Total Events',     value: events.length,               color: '#4f46e5', bg: 'rgba(79, 70, 229, 0.1)' },
-            { icon: Image,      label: 'Total Photos',     value: totalPhotos.toLocaleString(), color: '#0ea5e9', bg: 'rgba(14, 165, 233, 0.1)' },
-            { icon: CheckCircle2, label: 'Processed',      value: totalDone.toLocaleString(),   color: '#16a34a', bg: 'rgba(22, 163, 74, 0.1)' },
-            { icon: Users,      label: 'Face Groups',      value: totalClusters,                color: '#06b6d4', bg: 'rgba(6, 182, 212, 0.1)' },
+            { icon: Calendar,   label: 'Total Events',     value: events.length,               color: 'var(--primary)', bg: '#fff' },
+            { icon: Image,      label: 'Total Photos',     value: totalPhotos.toLocaleString(), color: '#0ea5e9', bg: '#fff' },
+            { icon: CheckCircle2, label: 'Processed',      value: totalDone.toLocaleString(),   color: 'var(--verified)', bg: '#fff' },
+            { icon: Users,      label: 'Face Groups',      value: totalClusters,                color: '#8B5CF6', bg: '#fff' },
           ].map(({ icon: Icon, label, value, color, bg }, i) => (
             <motion.div
               key={label}
@@ -101,20 +104,24 @@ export default function OrganizerDashboard() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: i * 0.07 }}
               style={{
-                background: '#fff',
-                border: '1px solid var(--color-border)',
+                background: bg,
                 borderRadius: 'var(--radius-lg)',
-                padding: '1.25rem 1.5rem',
-                boxShadow: 'var(--shadow-sm)',
-                display: 'flex', alignItems: 'center', gap: '1rem',
+                padding: '1.25rem',
+                border: '1px solid var(--border-light)',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.02)',
+                display: 'flex', alignItems: 'center', gap: '1.25rem'
               }}
             >
-              <div style={{ width: 44, height: 44, borderRadius: '12px', background: bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                <Icon size={20} color={color} />
+              <div style={{ 
+                width: 44, height: 44, borderRadius: 'var(--radius-md)', 
+                background: `${color}15`, color, 
+                display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 
+              }}>
+                <Icon size={20} strokeWidth={2.5} />
               </div>
               <div>
-                <div style={{ fontSize: '1.6rem', fontWeight: 800, letterSpacing: '-0.03em', color: 'var(--text-primary)', lineHeight: 1 }}>{value}</div>
-                <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.25rem', fontWeight: 500 }}>{label}</div>
+                <div className="font-display" style={{ fontSize: '1.5rem', fontWeight: 700, lineHeight: 1, color: 'var(--text-main)' }}>{value}</div>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.35rem', fontWeight: 500 }}>{label}</div>
               </div>
             </motion.div>
           ))}

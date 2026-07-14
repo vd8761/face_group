@@ -35,6 +35,8 @@
   --radius-sm:  8px;
   --radius-md:  12px;
   --radius-lg:  12px;
+  --radius-xl:  16px;
+  --radius-2xl: 24px;
   --radius-pill: 9999px;
 
   /* Shadows (Only on hover, very soft) */

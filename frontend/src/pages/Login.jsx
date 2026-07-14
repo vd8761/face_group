@@ -3,8 +3,8 @@ import { useNavigate, Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Mail, Lock, Eye, EyeOff, AlertCircle, Loader2, ArrowRight, Camera, Shield, Zap } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import logo from '../assets/logo.png';
 import Constellation from '../components/Constellation';
+import Logo from '../components/Logo';
 
 const floatingFeatures = [
   { icon: Camera, text: 'AI Face Grouping', sub: 'Automatically detects and groups every face with industry-leading computer vision.' },
@@ -39,8 +39,10 @@ export default function Login() {
 
   return (
     <div style={{
-      flex: 1, display: 'flex', minHeight: 'calc(100vh - 64px)',
+      flex: 1, display: 'flex',
       background: 'var(--color-bg)',
+      height: 'calc(100vh - 64px)', /* Lock height to exact remaining viewport */
+      overflow: 'hidden' /* Prevent scrolling at the container level */
     }}>
       {/* ── Left panel — branding ── */}
       <motion.div
@@ -49,7 +51,7 @@ export default function Login() {
         transition={{ duration: 0.6 }}
         style={{
           flex: '0 0 48%', display: 'flex', flexDirection: 'column',
-          justifyContent: 'center', padding: '3rem',
+          justifyContent: 'center', padding: '2rem 3rem',
           background: 'var(--ink)', 
           position: 'relative', overflow: 'hidden',
         }}
@@ -58,22 +60,22 @@ export default function Login() {
         <Constellation />
 
         {/* Logo */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '3rem', position: 'relative', zIndex: 1 }}>
-          <img src={logo} alt="UrFace AI Logo" style={{ height: 40, objectFit: 'contain' }} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.5rem', position: 'relative', zIndex: 1 }}>
+          <Logo light={true} />
         </div>
 
         {/* Headline */}
-        <div style={{ position: 'relative', zIndex: 1, marginBottom: '2.5rem' }}>
+        <div style={{ position: 'relative', zIndex: 1, marginBottom: '2rem' }}>
           <h2 className="font-display" style={{
-            color: '#fff', fontSize: 'clamp(2rem, 3.5vw, 3rem)',
-            lineHeight: 1.15, marginBottom: '1rem',
+            color: '#fff', fontSize: 'clamp(1.75rem, 3vw, 2.5rem)',
+            lineHeight: 1.15, marginBottom: '0.75rem',
           }}>
             Find Every Face.<br />
             <span style={{ color: 'var(--primary)' }}>
               Relive Every Memory.
             </span>
           </h2>
-          <p style={{ color: 'var(--text-muted)', fontSize: '1rem', lineHeight: 1.6, maxWidth: 380 }}>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.95rem', lineHeight: 1.5, maxWidth: 380 }}>
             Organize thousands of event photos within minutes using AI-powered face grouping and smart search.
           </p>
         </div>
@@ -90,15 +92,15 @@ export default function Login() {
                 display: 'flex', alignItems: 'center', gap: '1rem',
                 background: 'var(--ink-elevated)',
                 border: '1px solid var(--border-dark)',
-                borderRadius: 'var(--radius-md)', padding: '1rem 1.25rem',
+                borderRadius: 'var(--radius-md)', padding: '0.875rem 1rem',
               }}
             >
-              <div style={{ width: 42, height: 42, borderRadius: 'var(--radius-sm)', background: 'var(--ink)', border: '1px solid var(--border-dark)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                <Icon size={20} color="var(--primary)" strokeWidth={1.5} />
+              <div style={{ width: 36, height: 36, borderRadius: 'var(--radius-sm)', background: 'var(--ink)', border: '1px solid var(--border-dark)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <Icon size={18} color="var(--primary)" strokeWidth={1.5} />
               </div>
               <div>
-                <div className="font-display" style={{ color: '#fff', fontSize: '1rem', marginBottom: '0.125rem' }}>{text}</div>
-                <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', lineHeight: 1.4 }}>{sub}</div>
+                <div className="font-display" style={{ color: '#fff', fontSize: '0.95rem', marginBottom: '0.125rem' }}>{text}</div>
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem', lineHeight: 1.3 }}>{sub}</div>
               </div>
             </motion.div>
           ))}
@@ -108,18 +110,18 @@ export default function Login() {
       {/* ── Right panel — form ── */}
       <div style={{
         flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: '2rem 1.5rem',
+        padding: '1.5rem', overflowY: 'auto'
       }}>
         <motion.div
-          style={{ width: '100%', maxWidth: 420 }}
+          style={{ width: '100%', maxWidth: 380 }}
           initial={{ opacity: 0, y: 24 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, delay: 0.15 }}
         >
           {/* Greeting */}
-          <div style={{ marginBottom: '2.5rem' }}>
-            <h1 className="font-display" style={{ fontSize: '2.25rem', marginBottom: '0.5rem' }}>Welcome back 👋</h1>
-            <p style={{ color: 'var(--text-muted)', fontSize: '1rem' }}>
+          <div style={{ marginBottom: '1.5rem' }}>
+            <h1 className="font-display" style={{ fontSize: '2rem', marginBottom: '0.25rem' }}>Welcome back 👋</h1>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.95rem' }}>
               Sign in to manage your events and photos
             </p>
           </div>
@@ -215,8 +217,8 @@ export default function Login() {
               disabled={loading}
               className="btn btn-primary"
               style={{
-                width: '100%', justifyContent: 'center', padding: '0.875rem',
-                fontSize: '1rem', marginTop: '1.5rem',
+                width: '100%', justifyContent: 'center', padding: '0.75rem',
+                fontSize: '0.95rem', marginTop: '1rem',
               }}
             >
               {loading ? <Loader2 size={18} className="animate-spin" /> : 'Sign In'}
@@ -224,8 +226,8 @@ export default function Login() {
             </button>
           </form>
 
-          <div style={{ marginTop: '2rem', paddingTop: '1.5rem', borderTop: '1px solid var(--border-light)', textAlign: 'center' }}>
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1rem' }}>
+          <div style={{ marginTop: '1.5rem', paddingTop: '1.25rem', borderTop: '1px solid var(--border-light)', textAlign: 'center' }}>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
               Need attendee access?
             </p>
             <Link to="/scan" style={{ textDecoration: 'none' }}>
@@ -235,16 +237,16 @@ export default function Login() {
                 style={{
                   width: '100%', justifyContent: 'center', background: 'var(--surface)',
                   color: 'var(--primary)', border: '1px solid var(--primary)',
-                  fontWeight: 600, padding: '0.875rem', fontSize: '1rem',
+                  fontWeight: 600, padding: '0.75rem', fontSize: '0.95rem',
                   boxShadow: '0 4px 12px rgba(91, 95, 239, 0.1)'
                 }}
               >
-                <Camera size={18} style={{ marginRight: '0.5rem' }} /> Find My Photos
+                <Camera size={16} style={{ marginRight: '0.5rem' }} /> Find My Photos
               </button>
             </Link>
           </div>
 
-          <p style={{ textAlign: 'center', fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '1.5rem' }}>
+          <p style={{ textAlign: 'center', fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '1rem' }}>
             Organizations are provisioned by the platform admin only.
           </p>
         </motion.div>
