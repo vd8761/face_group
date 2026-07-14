@@ -85,8 +85,56 @@ class Settings(BaseSettings):
     COSINE_MATCH_THRESHOLD: float = 0.35          # < this = same person (lower = stricter)
 
     # ── File size limits ──────────────────────────────────────────────────────
-    MAX_UPLOAD_SIZE_MB: int = 25                  # Per-photo max
-    ALLOWED_IMAGE_TYPES: list[str] = ["image/jpeg", "image/png", "image/heic", "image/webp"]
+    MAX_UPLOAD_SIZE_MB: int = 100  # Per-photo max (RAW files can be 50-80MB)
+
+    # Extension-based allowlist — MIME types are unreliable for RAW files.
+    # Browsers often report RAW/TIFF as application/octet-stream.
+    ALLOWED_IMAGE_EXTENSIONS: set = {
+        # Standard web formats
+        ".jpg", ".jpeg", ".jpe", ".jfif",   # JPEG variants
+        ".png",                               # PNG
+        ".webp",                              # WebP
+        ".gif",                               # GIF (single-frame treated as still)
+        ".bmp",                               # Bitmap
+        ".tif", ".tiff",                      # TIFF (used by studios)
+        # Apple / Mobile
+        ".heic", ".heif",                     # iPhone HEIC
+        ".avif",                              # AVIF (modern mobile)
+        # Sony
+        ".arw", ".srf", ".sr2",
+        # Canon
+        ".cr2", ".cr3", ".crw",
+        # Nikon
+        ".nef", ".nrw",
+        # Adobe / Universal RAW
+        ".dng",
+        # Fujifilm
+        ".raf",
+        # Olympus / OM System
+        ".orf",
+        # Panasonic
+        ".rw2",
+        # Pentax / Ricoh
+        ".pef", ".ptx",
+        # Samsung
+        ".srw",
+        # Hasselblad
+        ".3fr", ".fff",
+        # Phase One
+        ".iiq",
+        # Epson
+        ".erf",
+        # Minolta / Konica-Minolta
+        ".mrw",
+        # Sigma
+        ".x3f",
+        # Kodak
+        ".k25", ".kdc", ".dcr",
+        # Leica
+        ".rwl", ".dng",
+        # Mamiya
+        ".mef", ".mfw", ".mos",
+    }
 
     # ── CORS ──────────────────────────────────────────────────────────────────
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "https://*.vercel.app"]

@@ -17,67 +17,130 @@ settings = get_settings()
 # Set InsightFace cache to /tmp (always writable on Render)
 os.environ.setdefault("INSIGHTFACE_HOME", "/tmp/insightface_cache")
 
-# RAW file extensions handled by rawpy
-RAW_EXTENSIONS = {'.arw', '.cr2', '.cr3', '.nef', '.dng', '.raf', '.orf', '.rw2', '.pef', '.srw'}
+# All RAW extensions that rawpy can handle
+RAW_EXTENSIONS = {
+    # Sony
+    '.arw', '.srf', '.sr2',
+    # Canon
+    '.cr2', '.cr3', '.crw',
+    # Nikon
+    '.nef', '.nrw',
+    # Adobe / Universal
+    '.dng',
+    # Fujifilm
+    '.raf',
+    # Olympus / OM System
+    '.orf',
+    # Panasonic
+    '.rw2',
+    # Pentax / Ricoh
+    '.pef', '.ptx',
+    # Samsung
+    '.srw',
+    # Hasselblad
+    '.3fr', '.fff',
+    # Phase One
+    '.iiq',
+    # Epson
+    '.erf',
+    # Minolta / Konica-Minolta
+    '.mrw',
+    # Sigma
+    '.x3f',
+    # Kodak
+    '.k25', '.kdc', '.dcr',
+    # Leica
+    '.rwl',
+    # Mamiya
+    '.mef', '.mfw', '.mos',
+}
+
+# Formats PIL handles natively with EXIF awareness
+PIL_EXTENSIONS = {'.jpg', '.jpeg', '.jpe', '.jfif', '.png', '.webp', '.tif', '.tiff', '.bmp', '.gif'}
+HEIC_EXTENSIONS = {'.heic', '.heif', '.avif'}
 
 
 def _decode_image_to_bgr(image_bytes: bytes, filename: str = '') -> np.ndarray:
     """
-    Decode any image format to a BGR numpy array for OpenCV/InsightFace.
-    Handles: JPEG (with EXIF rotation), PNG, WEBP, TIFF, HEIC,
-             and RAW camera formats (ARW, CR2, NEF, DNG, RAF, etc.).
+    Decode ANY supported image format to a BGR numpy array for OpenCV/InsightFace.
+    
+    Priority chain:
+    1. RAW camera files (Sony ARW, Canon CR2/CR3, Nikon NEF, DNG, Fuji RAF, etc.) via rawpy
+    2. HEIC/HEIF/AVIF (iPhone, modern mobile) via pillow-heif
+    3. Standard formats (JPEG+EXIF, PNG, WEBP, TIFF, BMP, GIF) via Pillow
+    4. Final fallback: direct cv2 decode
+
+    EXIF orientation is applied at every stage so portrait photos are never sideways.
+    Image dimensions are clamped to valid ranges before returning.
     """
     import cv2
     from PIL import Image, ImageOps
 
     ext = os.path.splitext(filename.lower())[1] if filename else ''
 
-    # ── RAW camera files ────────────────────────────────────────────────────
+    # ── 1. RAW camera files ─────────────────────────────────────────────────
     if ext in RAW_EXTENSIONS:
         try:
             import rawpy
             with rawpy.imread(io.BytesIO(image_bytes)) as raw:
                 rgb = raw.postprocess(
                     use_camera_wb=True,
-                    half_size=False,
+                    half_size=False,         # full resolution
                     no_auto_bright=False,
                     output_bps=8,
+                    demosaic_algorithm=rawpy.DemosaicAlgorithm.AHD,
                 )
-            # rawpy gives RGB, convert to BGR for OpenCV
-            return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+            bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+            return bgr
         except ImportError:
-            pass  # rawpy not available, fall through to PIL attempt
+            # rawpy not installed — fall through to PIL (may fail for RAW)
+            pass
         except Exception as e:
-            raise ValueError(f"Failed to decode RAW file ({ext}): {e}")
+            # Some RAW files may be corrupt or use unsupported compression
+            raise ValueError(
+                f"Cannot decode RAW file '{filename}' ({ext.upper()}): {e}. "
+                "Please export as JPEG or TIFF from your camera software."
+            )
 
-    # ── HEIC / HEIF ─────────────────────────────────────────────────────────
-    if ext in ('.heic', '.heif'):
+    # ── 2. HEIC / HEIF / AVIF ──────────────────────────────────────────────
+    if ext in HEIC_EXTENSIONS:
         try:
             import pillow_heif
             pillow_heif.register_heif_opener()
         except ImportError:
-            raise ValueError("HEIC files require pillow-heif. Please re-upload as JPEG.")
+            raise ValueError(
+                f"'{filename}' is a HEIC/AVIF file which requires pillow-heif. "
+                "Please re-upload as JPEG or PNG."
+            )
+        # Fall through to PIL path below (which can now open HEIC)
 
-    # ── Standard formats via PIL (handles EXIF orientation) ─────────────────
+    # ── 3. Standard formats via PIL with EXIF orientation ──────────────────
     try:
         pil_img = Image.open(io.BytesIO(image_bytes))
-        # Apply EXIF rotation — fixes portrait/rotated photos
-        pil_img = ImageOps.exif_transpose(pil_img)
+        # Apply EXIF orientation — fixes portrait/rotated JPEGs from phones & cameras
+        try:
+            pil_img = ImageOps.exif_transpose(pil_img)
+        except Exception:
+            pass  # Not all formats have EXIF; ignore silently
+        # Convert to RGB (handles palette, RGBA, L, CMYK, etc.)
         pil_img = pil_img.convert('RGB')
-        bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-        return bgr
-    except Exception as pil_err:
-        pass  # fall through to direct cv2 decode
+        bgr = cv2.cvtColor(np.array(pil_img, dtype=np.uint8), cv2.COLOR_RGB2BGR)
+        if bgr is not None and bgr.size > 0:
+            return bgr
+    except Exception:
+        pass  # Fall through to cv2 decode
 
-    # ── Final fallback: raw cv2 decode ───────────────────────────────────────
+    # ── 4. Final fallback: direct OpenCV decode ─────────────────────────────
     nparr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if img is None:
         raise ValueError(
-            f"Could not decode image — unsupported format '{ext}' or corrupted file. "
-            "Please upload JPEG, PNG, WEBP, HEIC, or a RAW format (ARW, CR2, NEF, DNG)."
+            f"Cannot decode image '{filename}' (extension: '{ext}'). "
+            "Supported formats: JPEG, PNG, WEBP, TIFF, HEIC, BMP, and all major RAW formats "
+            "(ARW, CR2/CR3, NEF, DNG, RAF, ORF, RW2, PEF, and more)."
         )
     return img
+
 
 _app = None
 

@@ -150,23 +150,21 @@ async def upload_photos(
     duplicates      = []
     skipped_fmt     = []
 
-    # RAW file extensions — browsers report these as octet-stream, not image/*
-    RAW_EXTS = {'.arw', '.cr2', '.cr3', '.nef', '.dng', '.raf', '.orf', '.rw2', '.pef', '.srw'}
+    import os as _os
 
     for file in files:
-        fname = file.filename or ''
-        import os as _os
+        fname = (file.filename or '').strip()
         ext = _os.path.splitext(fname.lower())[1]
-        # Accept known RAW extensions even if MIME is octet-stream
-        is_raw = ext in RAW_EXTS
-        if not is_raw and file.content_type not in settings.ALLOWED_IMAGE_TYPES:
-            skipped_fmt.append(file.filename)
+
+        # Extension-based check (MIME types are unreliable for RAW/TIFF files)
+        if ext not in settings.ALLOWED_IMAGE_EXTENSIONS:
+            skipped_fmt.append(fname)
             continue
 
         data = await file.read()
 
         if len(data) > settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024:
-            skipped_fmt.append(file.filename)
+            skipped_fmt.append(fname)
             continue
 
         # SHA-256 duplicate check
@@ -178,18 +176,18 @@ async def upload_photos(
             )
         )
         if existing.scalar_one_or_none():
-            duplicates.append(file.filename)
+            duplicates.append(fname)
             continue
 
         photo_id = uuid.uuid4()
 
-        # Upload to R2
+        # Upload to R2 — pass filename so storage layer can handle EXIF/RAW
         original_key = await upload_original(
             data, current_user.tenant_id, event_id, photo_id,
-            file.filename or f"{photo_id}.jpg", file.content_type
+            fname or f"{photo_id}{ext}", file.content_type or "application/octet-stream"
         )
         thumbnail_key = await upload_thumbnail(
-            data, current_user.tenant_id, event_id, photo_id
+            data, current_user.tenant_id, event_id, photo_id, filename=fname
         )
 
         photo = Photo(
@@ -199,10 +197,10 @@ async def upload_photos(
             original_key=original_key,
             thumbnail_key=thumbnail_key,
             original_size_bytes=len(data),
-            filename=file.filename or f"{photo_id}.jpg",
-            mime_type=file.content_type,
+            filename=fname or f"{photo_id}{ext}",
+            mime_type=file.content_type or "application/octet-stream",
             content_hash=content_hash,
-            status=PhotoStatus.queued,   # queued — bg task will set to done/failed
+            status=PhotoStatus.queued,
         )
         db.add(photo)
         total_bytes += len(data)
