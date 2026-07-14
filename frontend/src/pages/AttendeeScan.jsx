@@ -92,7 +92,7 @@ export default function AttendeeScan() {
   const [scanning, setScanning] = useState(false);
   const [results, setResults] = useState(null);
 
-  // Form fields — no email/password required
+  // Form fields
   const [form, setForm] = useState({ access_code: '', full_name: '', mobile: '' });
   const [joining, setJoining] = useState(false);
 
@@ -259,7 +259,7 @@ export default function AttendeeScan() {
               <div className="card" style={{ padding: '2rem' }}>
                 <div style={{ marginBottom: '1.75rem' }}>
                   <h2 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '0.35rem' }}>Enter Your Details</h2>
-                  <p className="text-sm text-secondary">Just 3 quick fields — no account needed</p>
+                  <p className="text-sm text-secondary">Just 3 quick fields, no account needed</p>
                 </div>
 
                 <form onSubmit={handleNext} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>

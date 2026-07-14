@@ -67,7 +67,7 @@ export default function FaceScanner({ onCapture, loading }) {
         ))}
       </div>
 
-      {/* Hidden native camera input — opens front camera directly on mobile */}
+      {/* Hidden native camera input */}
       <input
         ref={cameraInputRef}
         type="file"

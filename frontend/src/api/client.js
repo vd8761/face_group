@@ -4,7 +4,7 @@ const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 const api = axios.create({
   baseURL: BASE_URL,
-  timeout: 300000, // 5 minutes — needed for large batch photo uploads
+  timeout: 300000, // 5 minutes, needed for large batch photo uploads
 });
 
 // Attach JWT token to every request
@@ -16,7 +16,7 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// Handle 401 — clear token and redirect to login
+// Handle 401, clear token and redirect to login
 api.interceptors.response.use(
   (response) => response,
   (error) => {

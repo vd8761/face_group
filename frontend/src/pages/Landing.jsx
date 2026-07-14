@@ -12,14 +12,14 @@ const STATS = [
   { value: '<10s',    label: 'Guest finds their photos' },
   { value: '<5 min',  label: 'Organizer setup for 500 photos' },
   { value: '97%',     label: 'Face matching accuracy' },
-  { value: '100%',    label: 'Guest privacy — no raw selfies stored' },
+  { value: '100%',    label: 'Guest privacy, no raw selfies stored' },
 ];
 
 const STEPS = [
   {
     num: '01', color: 'var(--teal)', bg: 'var(--teal-soft)',
     title: 'Upload event photos',
-    desc: 'Drag-drop any JPEG files. Our system begins grouping faces automatically in minutes — no manual tagging.',
+    desc: 'Drag-drop any JPEG files. Our system begins grouping faces automatically in minutes. No manual tagging.',
   },
   {
     num: '02', color: 'var(--orange)', bg: 'var(--orange-soft)',
@@ -29,17 +29,17 @@ const STEPS = [
   {
     num: '03', color: 'var(--success)', bg: 'var(--success-soft)',
     title: 'Guests find photos in 10 seconds',
-    desc: 'One selfie scan. Every matching photo appears instantly — ready to view & download as ZIP.',
+    desc: 'One selfie scan. Every matching photo appears instantly, ready to view & download as ZIP.',
   },
 ];
 
 const FEATURES = [
   { icon: Users,          color: 'var(--teal)',    title: 'Smart face grouping in minutes',        desc: 'Our system clusters every unique face automatically. What would take days takes minutes.' },
-  { icon: Search,       color: 'var(--orange)',  title: 'Guests find photos in under 10 seconds', desc: 'One selfie scan matches a guest to every photo they appear in — no scrolling through 2,000 shots.' },
+  { icon: Search,       color: 'var(--orange)',  title: 'Guests find photos in under 10 seconds', desc: 'One selfie scan matches a guest to every photo they appear in. No scrolling through 2,000 shots.' },
   { icon: Shield,       color: 'var(--success)', title: 'Mathematical embeddings only',         desc: 'We store face vectors, not selfies. Vectors cannot reconstruct a photo. GDPR & DPDP compliant.' },
-  { icon: Download,     color: 'var(--teal)',    title: 'One-click ZIP download',               desc: 'Guests download every matched photo as a single ZIP archive — streamed, no browser limits.' },
-  { icon: Users,        color: 'var(--orange)',  title: 'Unlimited guests per event',           desc: 'Whether 50 or 5,000 attendees — everyone gets their photos. No per-guest fees ever.' },
-  { icon: Globe,        color: 'var(--success)', title: 'No app install for guests',            desc: 'Fully browser-based. Share a link or QR code — works on any smartphone in any country.' },
+  { icon: Download,     color: 'var(--teal)',    title: 'One-click ZIP download',               desc: 'Guests download every matched photo as a single ZIP archive. Streamed, no browser limits.' },
+  { icon: Users,        color: 'var(--orange)',  title: 'Unlimited guests per event',           desc: 'Whether 50 or 5,000 attendees, everyone gets their photos. No per-guest fees ever.' },
+  { icon: Globe,        color: 'var(--success)', title: 'No app install for guests',            desc: 'Fully browser-based. Share a link or QR code. Works on any smartphone in any country.' },
 ];
 
 const COMPARISON = [
@@ -60,7 +60,7 @@ const TESTIMONIALS = [
     name: 'Rahul S.', role: 'Wedding Photographer', event: 'Photography Studio · 40+ events', avatar: 'R', verified: true,
   },
   {
-    q: 'I was worried about facial recognition privacy. Knowing only math vectors are stored — not my actual selfie — actually makes this more private than a WhatsApp group.',
+    q: 'I was worried about facial recognition privacy. Knowing only math vectors are stored, not my actual selfie, actually makes this more private than a WhatsApp group.',
     name: 'Deepa K.', role: 'Event Attendee', event: 'Corporate Annual Day', avatar: 'D', verified: false,
   },
 ];
@@ -69,7 +69,7 @@ const FAQS = [
   { q: 'Do guests need to create an account?', a: 'No. Guests enter the event code, scan their face in their browser, and see all their photos. Zero sign-ups, zero app downloads.' },
   { q: 'How accurate is the face matching?', a: 'Our system achieves 97%+ accuracy. A clear, well-lit selfie gives the best results.' },
   { q: 'What happens to the selfie photo?', a: 'It is processed to extract a mathematical face vector and then immediately deleted. We never store the raw selfie image.' },
-  { q: 'Can I delete all event data after my event?', a: 'Yes — delete all photos, face data, and metadata from the organizer dashboard. Deletion is immediate and permanent.' },
+  { q: 'Can I delete all event data after my event?', a: 'Yes, delete all photos, face data, and metadata from the organizer dashboard. Deletion is immediate and permanent.' },
 ];
 
 /* ─── Shared helpers ─────────────────────────────────────────────────────── */
@@ -143,7 +143,7 @@ export default function Landing() {
 
           {/* Subheadline */}
           <p style={{ fontSize: '1.15rem', color: 'var(--text-2)', maxWidth: 600, margin: '0 auto 2.5rem', lineHeight: 1.65 }}>
-            Upload event photos. Share a code. Every attendee scans their face and instantly gets every picture they appear in — no account, no app, no manual tagging.
+            Upload event photos. Share a code. Every attendee scans their face and instantly gets every picture they appear in. No account, no app, no manual tagging.
           </p>
 
           {/* CTA row */}
@@ -247,7 +247,7 @@ export default function Landing() {
           <div style={{ textAlign: 'center', marginBottom: '3.5rem' }}>
             <SectionLabel>Features</SectionLabel>
             <h2 style={{ fontFamily: "'Poppins', sans-serif", marginBottom: '0.75rem' }}>Everything you need, nothing you don't</h2>
-            <p style={{ maxWidth: 460, margin: '0 auto', fontSize: '1rem' }}>Built specifically for events — not adapted from general cloud storage.</p>
+            <p style={{ maxWidth: 460, margin: '0 auto', fontSize: '1rem' }}>Built specifically for events, not adapted from general cloud storage.</p>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1.25rem' }}>
@@ -281,7 +281,7 @@ export default function Landing() {
         <div style={{ maxWidth: 900, margin: '0 auto' }}>
           <div style={{ textAlign: 'center', marginBottom: '2.5rem' }}>
             <SectionLabel>Security</SectionLabel>
-            <h2 style={{ fontFamily: "'Poppins', sans-serif", marginBottom: '0.5rem' }}>Privacy by design — not by policy</h2>
+            <h2 style={{ fontFamily: "'Poppins', sans-serif", marginBottom: '0.5rem' }}>Privacy by design, not by policy</h2>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '1.25rem' }}>
             {[
@@ -309,7 +309,7 @@ export default function Landing() {
           <div style={{ textAlign: 'center', marginBottom: '3rem' }}>
             <SectionLabel>Comparison</SectionLabel>
             <h2 style={{ fontFamily: "'Poppins', sans-serif", marginBottom: '0.5rem' }}>Why not just use a shared folder?</h2>
-            <p style={{ fontSize: '1rem', maxWidth: 400, margin: '0 auto' }}>The honest comparison — by what actually matters.</p>
+            <p style={{ fontSize: '1rem', maxWidth: 400, margin: '0 auto' }}>The honest comparison, by what actually matters.</p>
           </div>
 
           <div style={{ background: 'var(--base)', border: '1px solid var(--border)', borderRadius: '16px', overflow: 'hidden', boxShadow: 'var(--shadow-sm)' }}>
@@ -442,7 +442,7 @@ export default function Landing() {
             Run your next event with the confidence your guests deserve.
           </h2>
           <p style={{ color: 'rgba(255,255,255,0.65)', fontSize: '1.05rem', maxWidth: 500, margin: '0 auto 2.5rem' }}>
-            Start with 30 free photos — no credit card. Guests find their photos in under 10 seconds.
+            Start with 30 free photos, no credit card. Guests find their photos in under 10 seconds.
           </p>
           <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', flexWrap: 'wrap' }}>
             <Link to="/scan">

@@ -36,7 +36,7 @@ export default function Navbar() {
 
       {/* ── Actions ── */}
       <div className="navbar-actions">
-        {/* Find My Photos — for unauthenticated users not on scan page */}
+        {/* Find My Photos */}
         {!user && location.pathname !== '/scan' && (
           <Link to="/scan">
             <button
@@ -104,7 +104,7 @@ export default function Navbar() {
             </button>
           </>
         ) : (
-          /* Primary CTA — becomes filled blue after hero scroll */
+          /* Primary CTA */
           <Link to="/login">
             <button
               className="btn btn-sm"

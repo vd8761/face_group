@@ -70,7 +70,7 @@ export default function ConsentModal({ eventName, onAccept, onDecline }) {
           }}>
             <p className="text-xs" style={{ color: 'var(--warning)', lineHeight: 1.6 }}>
               ⚠️ Your face data is processed under applicable privacy laws (GDPR / DPDP Act 2023).
-              Only your face embedding is stored — not your selfie image.
+              Only your face embedding is stored. Not your selfie image.
               You can delete your data at any time from the gallery page.
             </p>
           </div>

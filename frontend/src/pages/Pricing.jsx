@@ -9,7 +9,7 @@ const PLANS = [
     price: 'Free',
     period: '',
     tag: 'No credit card',
-    desc: 'Try the full experience with a single event — no commitment needed.',
+    desc: 'Try the full experience with a single event. No commitment needed.',
     cta: 'Try with 30 free photos',
     ctaTo: '/scan',
     ctaStyle: 'outline',
@@ -90,19 +90,19 @@ const COMPARISON = [
 const FAQS = [
   {
     q: 'What happens if I go over my photo limit?',
-    a: 'On the Starter plan, processing stops at 30 photos. On Per Event plans, we\'ll notify you before the limit and let you top up at ₹15 per additional 100 photos — no surprise charges.',
+    a: 'On the Starter plan, processing stops at 30 photos. On Per Event plans, we\'ll notify you before the limit and let you top up at ₹15 per additional 100 photos. No surprise charges.',
   },
   {
     q: 'Can I cancel anytime?',
-    a: 'Yes. Business subscriptions can be cancelled before the next billing cycle with no penalty. Per Event credits never expire — they\'re yours to use at your own pace.',
+    a: 'Yes. Business subscriptions can be cancelled before the next billing cycle with no penalty. Per Event credits never expire, they\'re yours to use at your own pace.',
   },
   {
     q: 'Is the guest experience really free for attendees?',
-    a: 'Always. Guests scan their face and download their photos at no cost on all plans. Paid guest downloads (Business tier) are an optional revenue feature you can enable — it\'s your choice, not ours.',
+    a: 'Always. Guests scan their face and download their photos at no cost on all plans. Paid guest downloads (Business tier) are an optional revenue feature you can enable, it\'s your choice, not ours.',
   },
   {
     q: 'How secure is the face data?',
-    a: 'We store only mathematical face embeddings — never raw selfie images. All data is encrypted in transit (TLS 1.3) and at rest (AES-256). We comply with India\'s DPDP Act and GDPR.',
+    a: 'We store only mathematical face embeddings, never raw selfie images. All data is encrypted in transit (TLS 1.3) and at rest (AES-256). We comply with India\'s DPDP Act and GDPR.',
   },
 ];
 
@@ -120,7 +120,7 @@ export default function Pricing() {
             Start free. Scale when you need to.
           </h1>
           <p style={{ fontSize: '1.1rem', color: 'var(--text-muted)', maxWidth: 560, margin: '0 auto' }}>
-            Every plan gives guests a world-class photo-finding experience. You pay based on how many events you run — nothing more.
+            Every plan gives guests a world-class photo-finding experience. You pay based on how many events you run, nothing more.
           </p>
         </motion.div>
       </section>
@@ -206,7 +206,7 @@ export default function Pricing() {
                     ))}
                     {plan.notIncluded.map(f => (
                       <li key={f} style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)', opacity: 0.6 }}>
-                        <span style={{ flexShrink: 0, width: 15, textAlign: 'center', marginTop: '1px' }}>—</span>
+                        <span style={{ flexShrink: 0, width: 15, textAlign: 'center', marginTop: '1px' }}>-</span>
                         {f}
                       </li>
                     ))}
@@ -228,7 +228,7 @@ export default function Pricing() {
               </div>
               <div>
                 <div style={{ fontWeight: 700, color: 'var(--ink)', marginBottom: '0.5rem' }}>What if I go over my limit?</div>
-                <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', lineHeight: 1.6 }}>Processing pauses, you get notified, and you can top up at ₹15 per 100 extra photos — no automatic charges.</div>
+                <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', lineHeight: 1.6 }}>Processing pauses, you get notified, and you can top up at ₹15 per 100 extra photos. No automatic charges.</div>
               </div>
             </div>
           </div>
@@ -239,7 +239,7 @@ export default function Pricing() {
               </div>
               <div>
                 <div style={{ fontWeight: 700, color: 'var(--ink)', marginBottom: '0.5rem' }}>Can I cancel anytime?</div>
-                <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', lineHeight: 1.6 }}>Yes. Cancel before your next billing cycle — no penalties. Per Event credits never expire.</div>
+                <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', lineHeight: 1.6 }}>Yes. Cancel before your next billing cycle with no penalties. Per Event credits never expire.</div>
               </div>
             </div>
           </div>
@@ -309,7 +309,7 @@ export default function Pricing() {
       <section style={{ padding: '5rem 1.5rem 6rem', background: '#fff', borderTop: '1px solid var(--border-light)', textAlign: 'center' }}>
         <h2 className="font-display" style={{ fontSize: '2rem', color: 'var(--ink)', marginBottom: '1rem' }}>Ready to run your first event?</h2>
         <p style={{ color: 'var(--text-muted)', marginBottom: '2.5rem', fontSize: '1.05rem', maxWidth: 480, margin: '0 auto 2.5rem' }}>
-          Start with 30 free photos — no card required. Your guests find their photos in under 10 seconds.
+          Start with 30 free photos, no card required. Your guests find their photos in under 10 seconds.
         </p>
         <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', flexWrap: 'wrap' }}>
           <Link to="/scan">

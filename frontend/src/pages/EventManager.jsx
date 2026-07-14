@@ -206,7 +206,7 @@ export default function EventManager() {
           ))}
         </div>
 
-        {/* Upload tab — always mounted so switching tabs doesn't cancel ongoing uploads */}
+        {/* Upload tab */ }
         <div style={{ display: activeTab === 'upload' ? 'block' : 'none' }}>
           <PhotoUpload eventId={eventId} onUploadComplete={() => { setTimeout(loadAll, 1000); }} />
         </div>
@@ -238,7 +238,7 @@ export default function EventManager() {
                       } catch(e) {
                         const status = e?.response?.status;
                         if (status === 404) {
-                          alert('⏳ Backend is still deploying — please wait 2-3 minutes and try again.');
+                          alert('⏳ Backend is still deploying. Please wait 2-3 minutes and try again.');
                         } else {
                           alert('Error: ' + (e?.response?.data?.detail || e.message));
                         }
@@ -327,7 +327,7 @@ export default function EventManager() {
             {mergeIds.length > 0 && (
               <div className="card mb-4" style={{ padding: '0.75rem 1rem', background: 'var(--accent-soft)', borderColor: 'rgba(124,58,237,0.3)' }}>
                 <p className="text-sm text-accent">
-                  {mergeIds.length === 1 ? 'Select one more group to merge.' : 'Two groups selected — click Merge.'}
+                  {mergeIds.length === 1 ? 'Select one more group to merge.' : 'Two groups selected. Click Merge.'}
                   <button onClick={() => setMergeIds([])} className="btn btn-ghost btn-sm" style={{ marginLeft: '0.75rem', color: 'var(--text-muted)' }}>Cancel</button>
                 </p>
               </div>
@@ -336,7 +336,7 @@ export default function EventManager() {
             {clusters.length === 0 ? (
               <div className="card text-center" style={{ padding: '3rem' }}>
                 <AlertTriangle size={40} color="var(--text-muted)" style={{ margin: '0 auto 1rem' }} />
-                <p className="text-secondary">No face groups yet — upload and process photos first.</p>
+                <p className="text-secondary">No face groups yet. Upload and process photos first.</p>
               </div>
             ) : (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '1.5rem' }}>

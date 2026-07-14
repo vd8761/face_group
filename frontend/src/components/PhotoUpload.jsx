@@ -240,7 +240,7 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
               Import from Google Drive
             </div>
             <div style={{ color: 'var(--color-muted)', lineHeight: 1.5 }}>
-              Paste a shared folder link. The folder must be set to <strong>"Anyone with the link — Viewer"</strong>.
+              Paste a shared folder link. The folder must be set to <strong>"Anyone with the link - Viewer"</strong>.
               All images inside will be imported automatically.
             </div>
             <div style={{ color: 'var(--color-muted)', fontSize: '0.8rem' }}>
@@ -325,7 +325,7 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
             </motion.div>
           )}
 
-          {/* ── How-to guide — always visible ── */}
+          {/* ── How-to guide ── */}
           <div style={{
             borderRadius: 'var(--radius-lg)',
             border: '1px solid var(--color-border)',
@@ -372,7 +372,7 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
                       color: '#ea4335',
                       display: 'flex', alignItems: 'center', gap: '0.4rem',
                     }}>
-                      ⚠️ <span>This step is <strong>required</strong> — private folders cannot be imported</span>
+                      ⚠️ <span>This step is <strong>required</strong>. Private folders cannot be imported</span>
                     </div>
                   ),
                   warn: true,
@@ -418,7 +418,7 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
         </motion.div>
       )}
 
-      {/* ── Drop zone — only show in local mode and when not done ── */}
+      {/* ── Drop zone ── */}
       {uploadMode === 'local' && !done && (
         <div
           style={{
@@ -531,7 +531,7 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
               />
             </div>
             <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
-              You can switch tabs — upload will continue in the background
+              You can switch tabs, upload will continue in the background
             </p>
           </motion.div>
         )}
@@ -605,7 +605,7 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
                 </div>
                 <div style={{ padding: '0.625rem 1.125rem', borderTop: '1px solid rgba(217,119,6,0.12)', background: 'rgba(217,119,6,0.03)' }}>
                   <p style={{ fontSize: '0.75rem', color: '#92400e' }}>
-                    💡 Detected using SHA-256 file hash — same file content, even if renamed
+                    💡 Detected using SHA-256 file hash. Same file content, even if renamed
                   </p>
                 </div>
               </div>
