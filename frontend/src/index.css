@@ -559,9 +559,10 @@ textarea.input { height: auto; padding: 0.75rem 0.875rem; resize: vertical; }
 /* ─── Scan Split Layout ──────────────────────────────────────────────────── */
 .scan-split-container {
   display: flex;
-  min-height: 100vh;
+  height: calc(100vh - 68px);
   width: 100%;
   background: var(--base);
+  overflow: hidden;
 }
 
 .scan-split-left {
@@ -586,8 +587,6 @@ textarea.input { height: auto; padding: 0.75rem 0.875rem; resize: vertical; }
   
   .scan-split-right {
     flex: 1;
-    padding: 4rem 2rem;
-    align-items: center;
-    justify-content: center;
+    padding: 2rem;
   }
 }

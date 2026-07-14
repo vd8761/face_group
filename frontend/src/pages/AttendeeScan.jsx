@@ -55,12 +55,12 @@ const DynamicIllustration = ({ step }) => {
   const configs = {
     join: { Icon: User, color: '#06B6D4', glow: 'rgba(6,182,212,0.4)', bg: '#083344', title: 'Your Details' },
     consent: { Icon: Shield, color: '#10B981', glow: 'rgba(16,185,129,0.4)', bg: '#064E3B', title: 'Privacy First' },
-    scan: { Icon: Camera, color: '#8B5CF6', glow: 'rgba(139,92,246,0.4)', bg: '#4C1D95', title: 'Face Scan' },
+    scan: { Icon: Camera, color: '#FF7B00', glow: 'rgba(255,123,0,0.4)', bg: '#331800', title: 'Face Scan' },
   };
   const { Icon, color, glow, bg, title } = configs[step] || configs.join;
 
   return (
-    <div style={{ width: '100%', height: '100%', position: 'absolute', inset: 0, background: 'var(--navy)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+    <div style={{ width: '100%', height: '100%', position: 'absolute', inset: 0, background: 'linear-gradient(135deg, #01233F 0%, #001222 100%)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
       <motion.div
         key={`bg-${step}`}
         initial={{ opacity: 0, scale: 0.8 }}
@@ -94,6 +94,7 @@ export default function AttendeeScan() {
 
   // Form fields
   const [form, setForm] = useState({ access_code: '', full_name: '', mobile: '' });
+  const [fieldErrors, setFieldErrors] = useState({});
   const [joining, setJoining] = useState(false);
 
   const selfieRef = useRef(null); // store captured selfie file until scan step
@@ -101,9 +102,16 @@ export default function AttendeeScan() {
   const handleNext = async (e) => {
     e.preventDefault();
     setError('');
-    if (!form.access_code.trim()) { setError('Please enter the event access code.'); return; }
-    if (!form.full_name.trim()) { setError('Please enter your name.'); return; }
-    if (!form.mobile.trim() || form.mobile.trim().length < 6) { setError('Please enter a valid phone number.'); return; }
+    
+    // Custom Validation
+    const newErrors = {};
+    if (!form.access_code.trim()) newErrors.access_code = 'Required field.';
+    if (!form.full_name.trim()) newErrors.full_name = 'Required field.';
+    if (!form.mobile.trim() || form.mobile.trim().length < 6) newErrors.mobile = 'Enter a valid phone number.';
+    
+    setFieldErrors(newErrors);
+    if (Object.keys(newErrors).length > 0) return;
+
     setJoining(true);
     try {
       // Just validate the event code exists
@@ -223,12 +231,12 @@ export default function AttendeeScan() {
 
       {/* RIGHT PANEL */}
       <div className="scan-split-right">
-        <div style={{ maxWidth: 440, width: '100%', margin: '0 auto' }}>
+        <div style={{ maxWidth: 440, width: '100%', margin: 'auto' }}>
 
         {/* Header */}
-        <motion.div className="text-center" style={{ marginBottom: '2.5rem' }} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}>
-          <h1 className="font-display" style={{ fontSize: '2.25rem', marginBottom: '0.5rem', color: 'var(--ink)' }}>Find My Photos</h1>
-          <p className="text-secondary" style={{ fontSize: '0.95rem' }}>Scan your face to find every photo you appear in</p>
+        <motion.div className="text-center" style={{ marginBottom: '1.5rem' }} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}>
+          <h1 className="font-display" style={{ fontSize: '2rem', marginBottom: '0.25rem', color: 'var(--ink)' }}>Find My Photos</h1>
+          <p className="text-secondary" style={{ fontSize: '0.9rem' }}>Scan your face to find every photo you appear in</p>
         </motion.div>
 
         {/* Step Indicator */}
@@ -256,13 +264,13 @@ export default function AttendeeScan() {
         <AnimatePresence mode="wait">
           {step === 'join' && (
             <motion.div key="join" initial={{ opacity: 0, x: -24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 24 }} transition={{ type: 'spring', stiffness: 300, damping: 30 }}>
-              <div className="card" style={{ padding: '2rem' }}>
-                <div style={{ marginBottom: '1.75rem' }}>
-                  <h2 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '0.35rem' }}>Enter Your Details</h2>
+              <div className="card" style={{ padding: '1.5rem 2rem' }}>
+                <div style={{ marginBottom: '1.25rem' }}>
+                  <h2 style={{ fontSize: '1.2rem', fontWeight: 700, marginBottom: '0.15rem' }}>Enter Your Details</h2>
                   <p className="text-sm text-secondary">Just 3 quick fields, no account needed</p>
                 </div>
 
-                <form onSubmit={handleNext} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                <form onSubmit={handleNext} noValidate style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                   {/* Event Code */}
                   <div>
                     <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem' }}>
@@ -275,7 +283,10 @@ export default function AttendeeScan() {
                         required
                         placeholder="e.g. AB12CD34"
                         value={form.access_code}
-                        onChange={e => setForm(p => ({ ...p, access_code: e.target.value.toUpperCase() }))}
+                        onChange={e => {
+                          setForm(p => ({ ...p, access_code: e.target.value.toUpperCase() }));
+                          if (fieldErrors.access_code) setFieldErrors(p => ({ ...p, access_code: '' }));
+                        }}
                         style={{
                           paddingLeft: '2.75rem',
                           fontFamily: 'monospace',
@@ -283,57 +294,82 @@ export default function AttendeeScan() {
                           textTransform: 'uppercase',
                           fontWeight: 700,
                           fontSize: '1rem',
+                          borderColor: fieldErrors.access_code ? 'var(--error)' : 'var(--color-border)',
                         }}
                       />
                     </div>
+                    {fieldErrors.access_code && (
+                      <div style={{ color: 'var(--error)', fontSize: '0.8rem', marginTop: '0.5rem', fontWeight: 500 }}>{fieldErrors.access_code}</div>
+                    )}
                   </div>
 
-                  {/* Name */}
-                  <div>
-                    <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem' }}>
-                      Your Name
-                    </label>
-                    <div style={{ position: 'relative' }}>
-                      <User size={15} color="var(--text-muted)" style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
-                      <input
-                        className="input"
-                        required
-                        placeholder="e.g. Arjun Kumar"
-                        value={form.full_name}
-                        onChange={e => setForm(p => ({ ...p, full_name: e.target.value }))}
-                        style={{ paddingLeft: '2.75rem' }}
-                      />
+                  {/* Name and Phone Row */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1rem' }}>
+                    {/* Name */}
+                    <div>
+                      <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem' }}>
+                        Your Name
+                      </label>
+                      <div style={{ position: 'relative' }}>
+                        <User size={15} color="var(--text-muted)" style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
+                        <input
+                          className="input"
+                          required
+                          placeholder="e.g. Arjun Kumar"
+                          value={form.full_name}
+                          onChange={e => {
+                            setForm(p => ({ ...p, full_name: e.target.value }));
+                            if (fieldErrors.full_name) setFieldErrors(p => ({ ...p, full_name: '' }));
+                          }}
+                          style={{ 
+                            paddingLeft: '2.75rem',
+                            borderColor: fieldErrors.full_name ? 'var(--error)' : 'var(--color-border)'
+                          }}
+                        />
+                      </div>
+                      {fieldErrors.full_name && (
+                        <div style={{ color: 'var(--error)', fontSize: '0.8rem', marginTop: '0.5rem', fontWeight: 500 }}>{fieldErrors.full_name}</div>
+                      )}
                     </div>
-                  </div>
 
-                  {/* Phone */}
-                  <div>
-                    <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem' }}>
-                      Phone Number
-                    </label>
-                    <div style={{ position: 'relative' }}>
-                      <Phone size={15} color="var(--text-muted)" style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
-                      <input
-                        className="input"
-                        required
-                        type="tel"
-                        placeholder="+91 98765 43210"
-                        value={form.mobile}
-                        onChange={e => setForm(p => ({ ...p, mobile: e.target.value }))}
-                        style={{ paddingLeft: '2.75rem' }}
-                      />
+                    {/* Phone */}
+                    <div>
+                      <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem' }}>
+                        Phone Number
+                      </label>
+                      <div style={{ position: 'relative' }}>
+                        <Phone size={15} color="var(--text-muted)" style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
+                        <input
+                          className="input"
+                          required
+                          type="tel"
+                          placeholder="+91 98765 43210"
+                          value={form.mobile}
+                          onChange={e => {
+                            setForm(p => ({ ...p, mobile: e.target.value }));
+                            if (fieldErrors.mobile) setFieldErrors(p => ({ ...p, mobile: '' }));
+                          }}
+                          style={{ 
+                            paddingLeft: '2.75rem',
+                            borderColor: fieldErrors.mobile ? 'var(--error)' : 'var(--color-border)'
+                          }}
+                        />
+                      </div>
+                      {fieldErrors.mobile && (
+                        <div style={{ color: 'var(--error)', fontSize: '0.8rem', marginTop: '0.5rem', fontWeight: 500 }}>{fieldErrors.mobile}</div>
+                      )}
                     </div>
                   </div>
 
                   {/* Info note */}
                   <div style={{
                     display: 'flex', alignItems: 'flex-start', gap: '0.625rem',
-                    padding: '0.875rem 1rem',
-                    background: 'rgba(124,58,237,0.06)', border: '1px solid rgba(124,58,237,0.15)',
+                    padding: '0.75rem 1rem',
+                    background: 'rgba(6, 182, 212, 0.06)', border: '1px solid rgba(6, 182, 212, 0.15)',
                     borderRadius: '10px',
                   }}>
-                    <Shield size={14} color="var(--accent-light)" style={{ flexShrink: 0, marginTop: '2px' }} />
-                    <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: 1.6, margin: 0 }}>
+                    <Shield size={14} color="#06B6D4" style={{ flexShrink: 0, marginTop: '2px' }} />
+                    <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', lineHeight: 1.5, margin: 0 }}>
                       Your details are only used to find your event photos. We capture your IP address for security. No account is created.
                     </p>
                   </div>
