@@ -2,16 +2,16 @@
 ML pipeline service — face detection and embedding using InsightFace buffalo_l.
 Uses the buffalo_l model pack (RetinaFace detector + ArcFace embedder).
 
-Memory budget on Render Standard (2 GB):
-  - buffalo_l model:  ~1,500 MB  (constant, loaded once)
-  - Image buffer:     ~  100 MB  (capped via MAX_PROCESS_DIM)
-  - Working headroom: ~  400 MB  (OS + FastAPI + DB connections)
-
-Key memory controls:
-  - MAX_PROCESS_DIM: images are downscaled before detection (default 1920px)
-  - RAW half_size=True: 40MP ARW → 10MP before numpy array is created
-  - gc.collect() after every image frees numpy arrays immediately
-  - Global semaphore prevents concurrent face-detection runs
+# Memory budget on Render Pro (4 GB RAM / 2 CPU):
+#   - buffalo_l model:  ~1,500 MB  (constant, loaded once per worker)
+#   - Image buffer:     ~  100 MB  (capped via MAX_PROCESS_DIM)
+#   - 2× concurrent:    ~3,200 MB  — safe headroom on 4 GB
+#
+# Key memory controls:
+#   - MAX_PROCESS_DIM: images are downscaled before detection (default 1920px)
+#   - RAW half_size=True: 40MP ARW → 10MP before numpy array is created
+#   - gc.collect() after every image frees numpy arrays immediately
+#   - Global semaphore limits concurrent face-detection runs
 """
 import io
 import os
@@ -40,7 +40,9 @@ _DETECT_SEMAPHORE: asyncio.Semaphore | None = None
 def _get_semaphore() -> asyncio.Semaphore:
     global _DETECT_SEMAPHORE
     if _DETECT_SEMAPHORE is None:
-        _DETECT_SEMAPHORE = asyncio.Semaphore(1)
+        # 4 GB Pro instance can safely run 2 concurrent detections
+        # (1,500 MB model × 2 + ~400 MB headroom = ~3,400 MB)
+        _DETECT_SEMAPHORE = asyncio.Semaphore(2)
     return _DETECT_SEMAPHORE
 
 # ── Format sets ──────────────────────────────────────────────────────────────

@@ -27,15 +27,19 @@ celery_app.conf.update(
     enable_utc=True,
     task_track_started=True,
     task_acks_late=True,
-    worker_prefetch_multiplier=1,
-    # Retry failed tasks up to 3 times with exponential backoff
+    # On 4 GB / 2 CPU Pro instance: prefetch 2 so both CPU cores stay busy
+    worker_prefetch_multiplier=2,
+    # How many tasks a single worker process executes in parallel
+    worker_concurrency=2,
+    # Kill a single task that runs longer than 5 minutes (stuck / hung)
+    task_time_limit=300,
+    task_soft_time_limit=240,
     task_max_retries=3,
-    task_default_retry_delay=30,
-    # Dead-letter: tasks that exceed max retries go to failed state
+    task_default_retry_delay=15,     # Faster retry (was 30s)
     task_reject_on_worker_lost=True,
-    # Rate limits
+    # Rate limit raised for Pro instance (was 30/m = glacially slow for 4K photos)
     task_annotations={
-        "app.workers.tasks.process_photo": {"rate_limit": "30/m"},
+        "app.workers.tasks.process_photo": {"rate_limit": "120/m"},
     },
     # Result expiry
     result_expires=3600,
