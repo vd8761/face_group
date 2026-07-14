@@ -51,6 +51,41 @@ const StepIndicator = ({ step }) => {
   );
 };
 
+const DynamicIllustration = ({ step }) => {
+  const configs = {
+    join: { Icon: User, color: '#06B6D4', glow: 'rgba(6,182,212,0.4)', bg: '#083344', title: 'Your Details' },
+    consent: { Icon: Shield, color: '#10B981', glow: 'rgba(16,185,129,0.4)', bg: '#064E3B', title: 'Privacy First' },
+    scan: { Icon: Camera, color: '#8B5CF6', glow: 'rgba(139,92,246,0.4)', bg: '#4C1D95', title: 'Face Scan' },
+  };
+  const { Icon, color, glow, bg, title } = configs[step] || configs.join;
+
+  return (
+    <div style={{ width: '100%', height: '100%', position: 'absolute', inset: 0, background: 'var(--navy)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+      <motion.div
+        key={`bg-${step}`}
+        initial={{ opacity: 0, scale: 0.8 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 1.2 }}
+        transition={{ duration: 0.8 }}
+        style={{ position: 'absolute', width: '60vmin', height: '60vmin', background: `radial-gradient(circle, ${glow} 0%, transparent 70%)`, filter: 'blur(60px)', borderRadius: '50%' }}
+      />
+      <motion.div
+        key={`card-${step}`}
+        initial={{ opacity: 0, y: 40, rotateX: 20 }}
+        animate={{ opacity: 1, y: 0, rotateX: 0 }}
+        exit={{ opacity: 0, y: -40, rotateX: -20 }}
+        transition={{ duration: 0.6, type: 'spring', damping: 20 }}
+        style={{ position: 'relative', width: 280, height: 320, background: 'rgba(255,255,255,0.02)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 32, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', boxShadow: '0 24px 64px rgba(0,0,0,0.4)' }}
+      >
+        <div style={{ width: 120, height: 120, borderRadius: '50%', background: bg, display: 'flex', alignItems: 'center', justifyContent: 'center', border: `2px solid ${color}`, boxShadow: `0 0 40px ${glow}`, marginBottom: '2rem' }}>
+          <Icon size={56} color={color} />
+        </div>
+        <h3 style={{ color: '#fff', fontSize: '1.25rem', fontWeight: 600, letterSpacing: '0.02em' }}>{title}</h3>
+      </motion.div>
+    </div>
+  );
+};
+
 export default function AttendeeScan() {
   const [step, setStep] = useState('join');
   const [error, setError] = useState('');
@@ -178,8 +213,17 @@ export default function AttendeeScan() {
   }
 
   return (
-    <div style={{ flex: 1, minHeight: '100vh', background: 'var(--color-bg)' }}>
-      <div style={{ maxWidth: 500, margin: '0 auto', padding: '3rem 1.5rem' }}>
+    <div className="scan-split-container">
+      {/* LEFT PANEL */}
+      <div className="scan-split-left">
+        <AnimatePresence mode="wait">
+          <DynamicIllustration key={step} step={step} />
+        </AnimatePresence>
+      </div>
+
+      {/* RIGHT PANEL */}
+      <div className="scan-split-right">
+        <div style={{ maxWidth: 440, width: '100%', margin: '0 auto' }}>
 
         {/* Header */}
         <motion.div className="text-center" style={{ marginBottom: '2.5rem' }} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}>
@@ -371,6 +415,7 @@ export default function AttendeeScan() {
             </motion.div>
           )}
         </AnimatePresence>
+        </div>
       </div>
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>

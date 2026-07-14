@@ -1,81 +1,125 @@
+import { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Camera, LayoutDashboard, LogOut, Scan, Shield, UserCircle } from 'lucide-react';
+import { LayoutDashboard, LogOut, Scan, Shield, UserCircle, Camera, ChevronDown } from 'lucide-react';
 import Logo from './Logo';
 
 export default function Navbar() {
   const { user, logout, isRole } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const [scrolled, setScrolled] = useState(false);
 
-  const handleLogout = () => {
-    logout();
-    navigate('/');
-  };
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 72);
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
 
-  const roleIcon = user?.role === 'super_admin'
-    ? <Shield size={14} />
-    : user?.role === 'organizer'
-      ? <Camera size={14} />
-      : <UserCircle size={14} />;
+  const handleLogout = () => { logout(); navigate('/'); };
+  const isPublicPage = ['/', '/login', '/scan'].includes(location.pathname);
+
+  const roleLabel = user?.role === 'super_admin' ? 'Super Admin'
+    : user?.role === 'organizer' ? 'Organizer' : 'Attendee';
+
+  const roleColor = user?.role === 'super_admin' ? '#EF4444'
+    : user?.role === 'organizer' ? '#06B6D4' : '#10B981';
 
   return (
-    <nav className="navbar">
+    <nav className="navbar" style={{ boxShadow: scrolled ? 'var(--shadow-md)' : 'none' }}>
+      {/* ── Logo ── */}
       <Link to="/" className="navbar-logo">
-        <Logo />
+        <Logo size="sm" />
       </Link>
 
+      {/* ── Nav Links Removed ── */}
+
+      {/* ── Actions ── */}
       <div className="navbar-actions">
+        {/* Find My Photos — for unauthenticated users not on scan page */}
         {!user && location.pathname !== '/scan' && (
-          <Link to="/scan" className="btn btn-ghost btn-sm">
-            <Scan size={14} /> Find My Photos
+          <Link to="/scan">
+            <button
+              className="btn btn-ghost btn-sm"
+              style={{ color: 'var(--teal-dark)', fontWeight: 600 }}
+            >
+              <Scan size={14} />
+              Find My Photos
+            </button>
           </Link>
         )}
 
         {user ? (
           <>
+            {/* Admin */}
             {isRole('super_admin') && (
-              <Link to="/admin" className="btn btn-ghost btn-sm">
-                <Shield size={14} /> Admin
+              <Link to="/admin">
+                <button className="btn btn-ghost btn-sm">
+                  <Shield size={14} style={{ color: '#EF4444' }} />
+                  Admin
+                </button>
               </Link>
             )}
+
+            {/* Dashboard */}
             {(isRole('organizer') || isRole('super_admin')) && (
-              <Link to="/dashboard" className="btn btn-ghost btn-sm">
-                <LayoutDashboard size={14} /> Dashboard
+              <Link to="/dashboard">
+                <button className="btn btn-ghost btn-sm">
+                  <LayoutDashboard size={14} />
+                  Dashboard
+                </button>
               </Link>
             )}
+
+            {/* User Pill */}
             <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.5rem',
-              background: 'var(--color-surface-2)',
-              borderRadius: 'var(--radius-pill)',
-              padding: '0.375rem 0.75rem',
-              border: '1px solid var(--color-border)',
+              display: 'flex', alignItems: 'center', gap: '0.5rem',
+              background: 'var(--base)',
+              border: '1.5px solid var(--border)',
+              borderRadius: 'var(--r-full)',
+              padding: '0.3rem 0.875rem 0.3rem 0.375rem',
             }}>
               <div style={{
-                width: 26,
-                height: 26,
-                borderRadius: '50%',
-                background: 'linear-gradient(135deg,var(--primary),var(--accent2))',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: '#fff',
+                width: 28, height: 28, borderRadius: '50%',
+                background: `linear-gradient(135deg, ${roleColor}30, ${roleColor}15)`,
+                border: `2px solid ${roleColor}40`,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}>
-                {roleIcon}
+                {user?.role === 'super_admin'
+                  ? <Shield size={13} color={roleColor} />
+                  : user?.role === 'organizer'
+                    ? <Camera size={13} color={roleColor} />
+                    : <UserCircle size={13} color={roleColor} />
+                }
               </div>
-              <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
-                {user.role === 'super_admin' ? 'Super Admin' : user.role === 'organizer' ? 'Organizer' : 'Attendee'}
+              <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--navy)' }}>
+                {roleLabel}
               </span>
             </div>
+
+            {/* Logout */}
             <button onClick={handleLogout} className="btn btn-ghost btn-sm">
-              <LogOut size={14} /> Logout
+              <LogOut size={14} />
+              Logout
             </button>
           </>
         ) : (
-          <Link to="/login" className="btn btn-primary btn-sm">
-            Organizer Sign In
+          /* Primary CTA — becomes filled blue after hero scroll */
+          <Link to="/login">
+            <button
+              className="btn btn-sm"
+              style={{
+                background: scrolled && isPublicPage ? 'var(--teal)' : 'transparent',
+                color: scrolled && isPublicPage ? '#fff' : 'var(--navy)',
+                border: scrolled && isPublicPage ? '1.5px solid var(--teal)' : '1.5px solid var(--border)',
+                borderRadius: 'var(--r-md)',
+                fontWeight: 700,
+                transition: 'all 0.25s ease',
+                boxShadow: scrolled && isPublicPage ? 'var(--shadow-glow)' : 'none',
+              }}
+            >
+              Organizer Sign In
+            </button>
           </Link>
         )}
       </div>

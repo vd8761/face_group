@@ -54,28 +54,18 @@ export default function OrganizerDashboard() {
   return (
     <div style={{ flex: 1, background: 'var(--color-bg)' }}>
       <div style={{
-        background: 'var(--ink)',
-        position: 'relative',
-        overflow: 'hidden',
-        padding: '3rem 0 3.5rem',
-        borderBottom: '1px solid var(--border-dark)',
+        background: 'var(--surface)',
+        padding: '2.5rem 0 3.5rem',
+        borderBottom: '1px solid var(--border-light)',
       }}>
-        {/* Subtle glow effect */}
-        <div style={{
-          position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)',
-          width: '100%', maxWidth: 800, height: '100%',
-          background: 'radial-gradient(circle at top, rgba(91, 95, 239, 0.15) 0%, transparent 70%)',
-          pointerEvents: 'none'
-        }} />
-        
-        <div className="container" style={{ position: 'relative', zIndex: 1 }}>
+        <div className="container">
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem' }}>
             <div>
-              <h2 className="font-display" style={{ margin: 0, fontSize: '2rem', color: '#fff', marginBottom: '0.25rem' }}>
+              <h2 className="font-display" style={{ margin: 0, fontSize: '2rem', color: 'var(--ink)', marginBottom: '0.25rem' }}>
                 My Events
               </h2>
               <p style={{ color: 'var(--text-muted)', fontSize: '0.95rem', margin: 0 }}>
-                Manage your photo galleries, uploads, and AI face clusters.
+                Manage your photo galleries, uploads, and face clusters.
               </p>
             </div>
             <button
@@ -94,9 +84,9 @@ export default function OrganizerDashboard() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '2.5rem' }}>
           {[
             { icon: Calendar,   label: 'Total Events',     value: events.length,               color: 'var(--primary)', bg: '#fff' },
-            { icon: Image,      label: 'Total Photos',     value: totalPhotos.toLocaleString(), color: '#0ea5e9', bg: '#fff' },
-            { icon: CheckCircle2, label: 'Processed',      value: totalDone.toLocaleString(),   color: 'var(--verified)', bg: '#fff' },
-            { icon: Users,      label: 'Face Groups',      value: totalClusters,                color: '#8B5CF6', bg: '#fff' },
+            { icon: Image,      label: 'Total Photos',     value: totalPhotos.toLocaleString(), color: 'var(--primary)', bg: '#fff' },
+            { icon: CheckCircle2, label: 'Processed',      value: totalDone.toLocaleString(),   color: 'var(--success)', bg: '#fff' },
+            { icon: Users,      label: 'Face Groups',      value: totalClusters,                color: 'var(--primary)', bg: '#fff' },
           ].map(({ icon: Icon, label, value, color, bg }, i) => (
             <motion.div
               key={label}
@@ -105,17 +95,19 @@ export default function OrganizerDashboard() {
               transition={{ delay: i * 0.07 }}
               style={{
                 background: bg,
-                borderRadius: 'var(--radius-lg)',
-                padding: '1.25rem',
                 border: '1px solid var(--border-light)',
-                boxShadow: '0 2px 8px rgba(0,0,0,0.02)',
-                display: 'flex', alignItems: 'center', gap: '1.25rem'
+                borderRadius: 'var(--radius-md)',
+                padding: '1.25rem',
+                boxShadow: 'var(--shadow-sm)',
+                display: 'flex', alignItems: 'center', gap: '1rem'
               }}
             >
-              <div style={{ 
-                width: 44, height: 44, borderRadius: 'var(--radius-md)', 
-                background: `${color}15`, color, 
-                display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 
+              <div style={{
+                width: 48, height: 48,
+                background: 'rgba(11, 87, 208, 0.08)',
+                color: color,
+                borderRadius: '50%',
+                display: 'flex', alignItems: 'center', justifyContent: 'center'
               }}>
                 <Icon size={20} strokeWidth={2.5} />
               </div>

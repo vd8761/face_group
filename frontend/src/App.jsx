@@ -5,6 +5,7 @@ import Navbar from './components/Navbar';
 
 import Landing           from './pages/Landing';
 import Login             from './pages/Login';
+
 import SuperAdminPanel   from './pages/SuperAdminPanel';
 import OrganizerDashboard from './pages/OrganizerDashboard';
 import EventManager      from './pages/EventManager';
@@ -19,9 +20,10 @@ export default function App() {
           <Navbar />
           <Routes>
             {/* Public */}
-            <Route path="/"      element={<Landing />} />
-            <Route path="/login" element={<Login />} />
-            <Route path="/scan"  element={<AttendeeScan />} />
+            <Route path="/"        element={<Landing />} />
+            <Route path="/login"   element={<Login />} />
+
+            <Route path="/scan"    element={<AttendeeScan />} />
             <Route path="/gallery" element={<PhotoGallery />} />
 
             {/* Super admin only */}
