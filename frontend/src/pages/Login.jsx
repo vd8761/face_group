@@ -4,11 +4,12 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Mail, Lock, Eye, EyeOff, AlertCircle, Loader2, ArrowRight, Camera, Shield, Zap } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import logo from '../assets/logo.png';
+import Constellation from '../components/Constellation';
 
 const floatingFeatures = [
-  { icon: Camera, text: 'AI Face Grouping', sub: 'Powered by InsightFace' },
-  { icon: Shield, text: 'Privacy First',    sub: 'GDPR & DPDP Compliant' },
-  { icon: Zap,    text: 'Instant Results',  sub: 'Face match in < 3s' },
+  { icon: Camera, text: 'AI Face Grouping', sub: 'Automatically detects and groups every face with industry-leading computer vision.' },
+  { icon: Shield, text: 'Privacy First',    sub: 'Your face data belongs only to you. Encrypted. Secure. Never shared.' },
+  { icon: Zap,    text: 'Instant Results',  sub: 'Discover memories instantly without manual tagging.' },
 ];
 
 export default function Login() {
@@ -47,43 +48,33 @@ export default function Login() {
         animate={{ opacity: 1, x: 0 }}
         transition={{ duration: 0.6 }}
         style={{
-          flex: '0 0 45%', display: 'flex', flexDirection: 'column',
-          justifyContent: 'center', padding: '2rem 3rem',
-          background: '#0f172a', /* Deep Slate/Midnight */
+          flex: '0 0 48%', display: 'flex', flexDirection: 'column',
+          justifyContent: 'center', padding: '3rem',
+          background: 'var(--ink)', 
           position: 'relative', overflow: 'hidden',
         }}
         className="login-left-panel"
       >
-        {/* Decorative subtle glows */}
-        <div style={{
-          position: 'absolute', width: 600, height: 600, borderRadius: '50%',
-          background: 'radial-gradient(circle, rgba(79, 70, 229, 0.15) 0%, transparent 70%)',
-          top: -200, right: -200, pointerEvents: 'none',
-        }} />
-        <div style={{
-          position: 'absolute', width: 500, height: 500, borderRadius: '50%',
-          background: 'radial-gradient(circle, rgba(6, 182, 212, 0.1) 0%, transparent 70%)',
-          bottom: -150, left: -150, pointerEvents: 'none',
-        }} />
+        <Constellation />
 
         {/* Logo */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '2rem', position: 'relative', zIndex: 1 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '3rem', position: 'relative', zIndex: 1 }}>
           <img src={logo} alt="UrFace AI Logo" style={{ height: 40, objectFit: 'contain' }} />
         </div>
 
         {/* Headline */}
-        <div style={{ position: 'relative', zIndex: 1, marginBottom: '2rem' }}>
-          <h2 style={{
-            color: '#fff', fontSize: 'clamp(1.75rem, 3vw, 2.5rem)',
-            lineHeight: 1.2, marginBottom: '1rem', fontWeight: 800,
+        <div style={{ position: 'relative', zIndex: 1, marginBottom: '2.5rem' }}>
+          <h2 className="font-display" style={{
+            color: '#fff', fontSize: 'clamp(2rem, 3.5vw, 3rem)',
+            lineHeight: 1.15, marginBottom: '1rem',
           }}>
-            Welcome to<br />
-            <span style={{ background: 'linear-gradient(90deg, #22d3ee, #818cf8)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>
-              UrFace AI
+            Find Every Face.<br />
+            <span style={{ color: 'var(--primary)' }}>
+              Relive Every Memory.
             </span>
           </h2>
-          <p style={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.95rem', lineHeight: 1.5, maxWidth: 320 }}>
-            Upload event photos, manage clusters, and share access codes — all in one place.
+          <p style={{ color: 'var(--text-muted)', fontSize: '1rem', lineHeight: 1.6, maxWidth: 380 }}>
+            Organize thousands of event photos within minutes using AI-powered face grouping and smart search.
           </p>
         </div>
 
@@ -96,19 +87,18 @@ export default function Login() {
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: 0.3 + i * 0.12 }}
               style={{
-                display: 'flex', alignItems: 'center', gap: '0.75rem',
-                background: 'rgba(255,255,255,0.03)',
-                border: '1px solid rgba(255,255,255,0.05)',
-                borderRadius: '12px', padding: '0.75rem 1rem',
-                backdropFilter: 'blur(10px)',
+                display: 'flex', alignItems: 'center', gap: '1rem',
+                background: 'var(--ink-elevated)',
+                border: '1px solid var(--border-dark)',
+                borderRadius: 'var(--radius-md)', padding: '1rem 1.25rem',
               }}
             >
-              <div style={{ width: 38, height: 38, borderRadius: '10px', background: 'rgba(255,255,255,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                <Icon size={17} color="rgba(255,255,255,0.9)" />
+              <div style={{ width: 42, height: 42, borderRadius: 'var(--radius-sm)', background: 'var(--ink)', border: '1px solid var(--border-dark)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <Icon size={20} color="var(--primary)" strokeWidth={1.5} />
               </div>
               <div>
-                <div style={{ color: '#fff', fontSize: '0.875rem', fontWeight: 600 }}>{text}</div>
-                <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.75rem' }}>{sub}</div>
+                <div className="font-display" style={{ color: '#fff', fontSize: '1rem', marginBottom: '0.125rem' }}>{text}</div>
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', lineHeight: 1.4 }}>{sub}</div>
               </div>
             </motion.div>
           ))}
@@ -127,9 +117,9 @@ export default function Login() {
           transition={{ duration: 0.5, delay: 0.15 }}
         >
           {/* Greeting */}
-          <div style={{ marginBottom: '2rem' }}>
-            <h1 style={{ fontSize: '1.75rem', marginBottom: '0.375rem', fontWeight: 800 }}>Welcome back 👋</h1>
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+          <div style={{ marginBottom: '2.5rem' }}>
+            <h1 className="font-display" style={{ fontSize: '2.25rem', marginBottom: '0.5rem' }}>Welcome back 👋</h1>
+            <p style={{ color: 'var(--text-muted)', fontSize: '1rem' }}>
               Sign in to manage your events and photos
             </p>
           </div>
@@ -234,28 +224,25 @@ export default function Login() {
             </button>
           </form>
 
-          {/* Divider */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', margin: '1.75rem 0' }}>
-            <div style={{ flex: 1, height: 1, background: 'var(--color-border)' }} />
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>Not an organizer?</span>
-            <div style={{ flex: 1, height: 1, background: 'var(--color-border)' }} />
+          <div style={{ marginTop: '2rem', paddingTop: '1.5rem', borderTop: '1px solid var(--border-light)', textAlign: 'center' }}>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1rem' }}>
+              Need attendee access?
+            </p>
+            <Link to="/scan" style={{ textDecoration: 'none' }}>
+              <button
+                type="button"
+                className="btn btn-pill"
+                style={{
+                  width: '100%', justifyContent: 'center', background: 'var(--surface)',
+                  color: 'var(--primary)', border: '1px solid var(--primary)',
+                  fontWeight: 600, padding: '0.875rem', fontSize: '1rem',
+                  boxShadow: '0 4px 12px rgba(91, 95, 239, 0.1)'
+                }}
+              >
+                <Camera size={18} style={{ marginRight: '0.5rem' }} /> Find My Photos
+              </button>
+            </Link>
           </div>
-
-          {/* Attendee CTA */}
-          <Link
-            to="/scan"
-            style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem',
-              padding: '0.875rem 1.5rem', borderRadius: 'var(--radius-lg)',
-              background: 'var(--accent-soft)', border: '1px solid rgba(124,58,237,0.25)',
-              color: 'var(--accent-light)', fontWeight: 600, fontSize: '0.9375rem',
-              textDecoration: 'none', transition: 'all 0.2s',
-            }}
-          >
-            <Camera size={17} />
-            Find My Photos as Attendee
-            <ArrowRight size={15} />
-          </Link>
 
           <p style={{ textAlign: 'center', fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '1.5rem' }}>
             Organizations are provisioned by the platform admin only.
