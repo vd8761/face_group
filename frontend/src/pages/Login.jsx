@@ -3,6 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Mail, Lock, Eye, EyeOff, AlertCircle, Loader2, ArrowRight, Camera, Shield, Zap } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import logo from '../assets/logo.png';
 
 const floatingFeatures = [
   { icon: Camera, text: 'AI Face Grouping', sub: 'Powered by InsightFace' },
@@ -48,7 +49,7 @@ export default function Login() {
         style={{
           flex: '0 0 45%', display: 'flex', flexDirection: 'column',
           justifyContent: 'center', padding: '3rem 4rem',
-          background: 'linear-gradient(145deg, #1e0a3c 0%, #3b1278 55%, #6d28d9 100%)',
+          background: 'linear-gradient(145deg, #0f172a 0%, #312e81 55%, #4f46e5 100%)',
           position: 'relative', overflow: 'hidden',
         }}
         className="login-left-panel"
@@ -56,25 +57,18 @@ export default function Login() {
         {/* Decorative orbs */}
         <div style={{
           position: 'absolute', width: 400, height: 400, borderRadius: '50%',
-          background: 'radial-gradient(circle, rgba(236,72,153,0.25) 0%, transparent 70%)',
+          background: 'radial-gradient(circle, rgba(6, 182, 212, 0.2) 0%, transparent 70%)',
           top: -100, right: -100, pointerEvents: 'none',
         }} />
         <div style={{
           position: 'absolute', width: 300, height: 300, borderRadius: '50%',
-          background: 'radial-gradient(circle, rgba(124,58,237,0.3) 0%, transparent 70%)',
+          background: 'radial-gradient(circle, rgba(79, 70, 229, 0.3) 0%, transparent 70%)',
           bottom: -80, left: -80, pointerEvents: 'none',
         }} />
 
         {/* Logo */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '3.5rem', position: 'relative', zIndex: 1 }}>
-          <svg width="40" height="40" viewBox="0 0 34 34" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <rect width="34" height="34" rx="9" fill="rgba(255,255,255,0.15)" />
-            <rect width="34" height="34" rx="9" stroke="rgba(255,255,255,0.3)" strokeWidth="1" />
-            <circle cx="17" cy="17" r="9" stroke="white" strokeWidth="1.5" fill="none" strokeDasharray="3 1.5"/>
-            <circle cx="17" cy="15" r="4" stroke="white" strokeWidth="1.5" fill="none"/>
-            <path d="M10.5 24.5 C10.5 21 13.5 19 17 19 C20.5 19 23.5 21 23.5 24.5" stroke="white" strokeWidth="1.5" strokeLinecap="round" fill="none"/>
-          </svg>
-          <span style={{ fontSize: '1.5rem', fontWeight: 800, color: '#fff', letterSpacing: '-0.02em' }}>Urface</span>
+          <img src={logo} alt="UrFace AI Logo" style={{ height: 40, objectFit: 'contain' }} />
         </div>
 
         {/* Headline */}
@@ -84,7 +78,7 @@ export default function Login() {
             lineHeight: 1.2, marginBottom: '1rem', fontWeight: 800,
           }}>
             Organizer<br />
-            <span style={{ background: 'linear-gradient(90deg,#f9a8d4,#c4b5fd)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>
+            <span style={{ background: 'linear-gradient(90deg, #22d3ee, #818cf8)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>
               Command Centre
             </span>
           </h2>

@@ -53,9 +53,8 @@ export default function OrganizerDashboard() {
 
   return (
     <div style={{ flex: 1, background: 'var(--color-bg)', minHeight: '100vh' }}>
-      {/* Page header banner */}
       <div style={{
-        background: 'linear-gradient(135deg, rgba(124,58,237,0.08) 0%, rgba(236,72,153,0.06) 100%)',
+        background: 'linear-gradient(135deg, rgba(79, 70, 229, 0.08) 0%, rgba(6, 182, 212, 0.06) 100%)',
         borderBottom: '1px solid var(--color-border)',
         padding: '2rem 0',
       }}>
@@ -65,7 +64,7 @@ export default function OrganizerDashboard() {
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem', marginBottom: '0.375rem' }}>
                 <div style={{
                   width: 36, height: 36, borderRadius: '10px',
-                  background: 'linear-gradient(135deg,#7c3aed,#ec4899)',
+                  background: 'linear-gradient(135deg,#4f46e5,#06b6d4)',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                 }}>
                   <Camera size={18} color="#fff" />
@@ -91,10 +90,10 @@ export default function OrganizerDashboard() {
         {/* Stats row */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '2rem' }}>
           {[
-            { icon: Calendar,   label: 'Total Events',     value: events.length,               color: '#7c3aed', bg: 'rgba(124,58,237,0.1)' },
-            { icon: Image,      label: 'Total Photos',     value: totalPhotos.toLocaleString(), color: '#2563eb', bg: 'rgba(37,99,235,0.1)' },
-            { icon: CheckCircle2, label: 'Processed',      value: totalDone.toLocaleString(),   color: '#16a34a', bg: 'rgba(22,163,74,0.1)' },
-            { icon: Users,      label: 'Face Groups',      value: totalClusters,                color: '#ec4899', bg: 'rgba(236,72,153,0.1)' },
+            { icon: Calendar,   label: 'Total Events',     value: events.length,               color: '#4f46e5', bg: 'rgba(79, 70, 229, 0.1)' },
+            { icon: Image,      label: 'Total Photos',     value: totalPhotos.toLocaleString(), color: '#0ea5e9', bg: 'rgba(14, 165, 233, 0.1)' },
+            { icon: CheckCircle2, label: 'Processed',      value: totalDone.toLocaleString(),   color: '#16a34a', bg: 'rgba(22, 163, 74, 0.1)' },
+            { icon: Users,      label: 'Face Groups',      value: totalClusters,                color: '#06b6d4', bg: 'rgba(6, 182, 212, 0.1)' },
           ].map(({ icon: Icon, label, value, color, bg }, i) => (
             <motion.div
               key={label}
