@@ -748,7 +748,6 @@ async def _reprocess_failed_background(photo_ids: List[str], event: Event):
 @router.post("/events/{event_id}/retry-failed", status_code=202)
 async def retry_failed_photos(
     event_id: uuid.UUID,
-    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_organizer),
     db: AsyncSession = Depends(get_db),
 ):
@@ -777,7 +776,7 @@ async def retry_failed_photos(
         p.error_message = None
     await db.commit()
 
-    background_tasks.add_task(_reprocess_failed_background, photo_ids=photo_ids, event=event)
+    asyncio.create_task(_reprocess_failed_background(photo_ids=photo_ids, event=event))
 
     return {
         "retrying": len(photo_ids),
