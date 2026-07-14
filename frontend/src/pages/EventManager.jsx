@@ -23,6 +23,7 @@ export default function EventManager() {
   const { eventId } = useParams();
   const [event, setEvent]     = useState(null);
   const [photos, setPhotos]   = useState([]);
+  const [totalServerPhotos, setTotalServerPhotos] = useState(0);
   const [clusters, setClusters] = useState([]);
   const [activeTab, setActiveTab] = useState('upload'); // 'upload' | 'photos' | 'clusters'
   const [loading, setLoading] = useState(true);
@@ -47,6 +48,7 @@ export default function EventManager() {
     try {
       const { data } = await api.get(`/api/photos/events/${eventId}?limit=200`);
       setPhotos(data.photos);
+      setTotalServerPhotos(data.total || 0);
     } catch (e) { console.error(e); }
   }, [eventId]);
 
@@ -129,7 +131,7 @@ export default function EventManager() {
     </div>
   );
 
-  const doneCount   = photos.filter(p => p.status === 'done').length;
+  const doneCount   = event?.processed_count || photos.filter(p => p.status === 'done').length;
   const failedCount = photos.filter(p => p.status === 'failed').length;
 
   return (
@@ -153,7 +155,7 @@ export default function EventManager() {
         {/* Quick stats */}
         <div className="grid-4 mb-6" style={{ gap: '0.875rem' }}>
           {[
-            { label: 'Total Photos',  value: photos.length,    icon: Image },
+            { label: 'Total Photos',  value: totalServerPhotos, icon: Image },
             { label: 'Processed',     value: doneCount,         icon: CheckCircle2, color: 'var(--success)' },
             { label: 'Failed',        value: failedCount,       icon: AlertCircle,  color: failedCount > 0 ? 'var(--error)' : undefined },
             { label: 'Face Groups',   value: clusters.length,   icon: Users,        color: 'var(--accent-light)' },
@@ -168,14 +170,14 @@ export default function EventManager() {
         </div>
 
         {/* Processing progress bar */}
-        {photos.length > 0 && (
+        {totalServerPhotos > 0 && (
           <div className="card mb-6" style={{ padding: '1.125rem 1.5rem' }}>
             <div className="usage-bar-label mb-2">
               <span className="font-semibold text-sm">Processing Progress</span>
-              <span className="text-sm text-muted">{doneCount} / {photos.length} photos done</span>
+              <span className="text-sm text-muted">{doneCount} / {totalServerPhotos} photos done</span>
             </div>
             <div className="progress-bar" style={{ height: 8 }}>
-              <div className="progress-bar-fill" style={{ width: `${photos.length > 0 ? (doneCount / photos.length) * 100 : 0}%` }} />
+              <div className="progress-bar-fill" style={{ width: `${totalServerPhotos > 0 ? (doneCount / totalServerPhotos) * 100 : 0}%` }} />
             </div>
           </div>
         )}
@@ -184,7 +186,7 @@ export default function EventManager() {
         <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem', borderBottom: '1px solid var(--color-border)' }}>
           {[
             { id: 'upload',   label: 'Upload Photos', icon: Upload },
-            { id: 'photos',   label: `Photos (${photos.length})`, icon: Image },
+            { id: 'photos',   label: `Photos (${totalServerPhotos})`, icon: Image },
             { id: 'clusters', label: `Face Groups (${clusters.length})`, icon: Users },
           ].map(({ id, label, icon: Icon }) => (
             <button
@@ -213,10 +215,10 @@ export default function EventManager() {
           <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
             <div className="flex justify-between items-center mb-4">
               <span className="text-sm text-muted">
-                {photos.length} total &nbsp;·&nbsp;
-                <span style={{ color: 'var(--error)' }}>{photos.filter(p => p.status === 'failed').length} failed</span>
+                {totalServerPhotos} total &nbsp;·&nbsp;
+                <span style={{ color: 'var(--error)' }}>{failedCount} failed in latest view</span>
                 &nbsp;·&nbsp;
-                <span style={{ color: 'var(--success)' }}>{photos.filter(p => p.status === 'done').length} done</span>
+                <span style={{ color: 'var(--success)' }}>{doneCount} done</span>
               </span>
               <div className="flex items-center gap-2" style={{ flexWrap: 'wrap' }}>
                 {photos.some(p => p.status === 'failed' || p.status === 'queued' || p.status === 'processing') && (
