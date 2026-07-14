@@ -293,7 +293,6 @@ def _parse_drive_folder_id(url: str) -> str:
 @router.post("/events/{event_id}/import-drive", status_code=202)
 async def import_from_drive(
     event_id: uuid.UUID,
-    background_tasks: BackgroundTasks,
     body: dict,
     current_user: User = Depends(require_organizer),
     db: AsyncSession = Depends(get_db),
@@ -409,13 +408,14 @@ async def import_from_drive(
     ))
     await db.commit()
 
-    # ── Background task: download → R2 → face detect ─────────────────────────
-    background_tasks.add_task(
-        _process_drive_import,
-        queued_items=queued_items,
-        api_key=api_key,
-        event_id=event_id,
-        tenant_id=current_user.tenant_id,
+    # ── Fire-and-forget async task: download → R2 → Celery dispatch ──────────
+    asyncio.create_task(
+        _process_drive_import(
+            queued_items=queued_items,
+            api_key=api_key,
+            event_id=event_id,
+            tenant_id=current_user.tenant_id,
+        )
     )
 
     return {
