@@ -79,8 +79,8 @@ class Settings(BaseSettings):
 
     # ── ML Pipeline ───────────────────────────────────────────────────────────
     # InsightFace buffalo_l — best accuracy, requires 2GB RAM (Render Standard plan)
-    FACE_DETECTION_THRESHOLD: float = 0.7
-    FACE_MIN_SIZE: int = 40
+    FACE_DETECTION_THRESHOLD: float = 0.80
+    FACE_MIN_SIZE: int = 60
     EMBEDDING_DIM: int = 512                     # ArcFace 512-dim
 
     # ── Agglomerative Clustering ──────────────────────────────────────────────

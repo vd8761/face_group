@@ -242,7 +242,15 @@ def detect_and_embed(image_bytes: bytes, filename: str = '') -> List[DetectedFac
 
             face_size_ok  = w_f >= settings.FACE_MIN_SIZE and h_f >= settings.FACE_MIN_SIZE
             confidence_ok = confidence >= settings.FACE_DETECTION_THRESHOLD
-            is_low_quality = not (face_size_ok and confidence_ok)
+            
+            # Check face rotation (yaw) to reject extreme side profiles
+            pose_ok = True
+            if hasattr(face, 'pose') and face.pose is not None and len(face.pose) >= 2:
+                pitch, yaw, roll = face.pose[:3]
+                if abs(yaw) > 45:
+                    pose_ok = False
+
+            is_low_quality = not (face_size_ok and confidence_ok and pose_ok)
 
             size_score    = min(1.0, min(w_f, h_f) / 150.0)
             quality_score = float(np.sqrt(confidence * size_score))
