@@ -26,7 +26,10 @@ pillow-heif>=0.15.0    # HEIC / HEIF (iPhone photos)
 # buffalo_l model: ~500MB download, ~1.5GB RAM at runtime
 # Requires Render Standard plan (2GB RAM) or equivalent
 insightface==0.7.3
-onnxruntime==1.20.1
+# The GPU wheel also contains the CPU execution provider, so Linux/Windows
+# deployments can use CUDA when present and fall back cleanly when it is not.
+onnxruntime==1.20.1; platform_system == "Darwin"
+onnxruntime-gpu[cuda,cudnn]==1.21.0; platform_system != "Darwin"
 numpy==1.26.4
 opencv-python-headless==4.10.0.84
 
@@ -40,5 +43,7 @@ httpx==0.28.1
 
 # Observability
 sentry-sdk[fastapi]==2.19.0
+psutil>=5.9.8
+nvidia-ml-py>=12.535.133
 celery==5.4.0  
 redis==5.0.4  

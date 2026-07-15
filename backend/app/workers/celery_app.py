@@ -2,6 +2,7 @@
 Celery application configuration — uses Upstash Redis as broker and backend.
 """
 from celery import Celery
+from celery.signals import worker_process_init, worker_process_shutdown
 import ssl
 from ..config import get_settings
 
@@ -21,8 +22,9 @@ celery_app.conf.update(
     broker_use_ssl=ssl_conf,
     redis_backend_use_ssl=ssl_conf,
     broker_connection_timeout=3.0,
-    broker_connection_retry=False,
-    broker_connection_max_retries=0,
+    broker_connection_retry=True,
+    broker_connection_retry_on_startup=True,
+    broker_connection_max_retries=10,
     task_serializer="json",
     accept_content=["json"],
     result_serializer="json",
@@ -30,13 +32,13 @@ celery_app.conf.update(
     enable_utc=True,
     task_track_started=True,
     task_acks_late=True,
-    # On 4 GB / 2 CPU Pro instance: prefetch 2 so both CPU cores stay busy
-    worker_prefetch_multiplier=2,
-    # How many tasks a single worker process executes in parallel
-    worker_concurrency=2,
-    # Kill a single task that runs longer than 5 minutes (stuck / hung)
-    task_time_limit=300,
-    task_soft_time_limit=240,
+    # The local 4 GB GPU can safely hold one Buffalo-L worker at a time.
+    worker_prefetch_multiplier=1,
+    worker_concurrency=1,
+    # Large originals can need several tiled CPU passes. Keep a hard guard
+    # without failing healthy 100 MB photos on slower workers.
+    task_time_limit=900,
+    task_soft_time_limit=840,
     task_max_retries=3,
     task_default_retry_delay=15,     # Faster retry (was 30s)
     task_reject_on_worker_lost=True,
@@ -47,3 +49,17 @@ celery_app.conf.update(
     # Result expiry
     result_expires=3600,
 )
+
+
+@worker_process_init.connect
+def _start_worker_resource_sampler(**_kwargs):
+    from ..services.telemetry import start_resource_sampler
+
+    start_resource_sampler("worker")
+
+
+@worker_process_shutdown.connect
+def _stop_worker_resource_sampler(**_kwargs):
+    from ..services.telemetry import stop_resource_sampler
+
+    stop_resource_sampler()

@@ -56,29 +56,36 @@ def create_access_token(
 # ─────────────────────────────────────────────────────────────────────────────
 # JWT decoding + current user dependency
 # ─────────────────────────────────────────────────────────────────────────────
-async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
-    db: AsyncSession = Depends(get_db),
-) -> User:
+async def resolve_user_from_token(token: str, db: AsyncSession) -> User:
+    """Resolve a current DB user from a JWT.
+
+    Shared by HTTP bearer authentication and the WebSocket first-message
+    handshake. Role and tenant scope are always taken from the current database
+    row, never from client-supplied WebSocket data or stale JWT claims.
+    """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
-        token = credentials.credentials
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        user_id: str = payload.get("sub")
-        if user_id is None:
-            raise credentials_exception
-    except JWTError:
+        user_id = uuid.UUID(str(payload.get("sub")))
+    except (JWTError, TypeError, ValueError, AttributeError):
         raise credentials_exception
 
-    result = await db.execute(select(User).where(User.id == uuid.UUID(user_id)))
+    result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if user is None or not user.is_active:
         raise credentials_exception
     return user
+
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    return await resolve_user_from_token(credentials.credentials, db)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

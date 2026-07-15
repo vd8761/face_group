@@ -4,6 +4,9 @@ Allows attendees to scan their selfie using just an event access code + name + p
 """
 import uuid
 from fastapi import APIRouter, UploadFile, File, Form, Request, HTTPException
+from fastapi.concurrency import run_in_threadpool
+from redis.asyncio import Redis
+from redis.exceptions import RedisError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from fastapi import Depends
@@ -13,10 +16,32 @@ from ..models import Event, Photo, FaceDetection, FaceCluster, AuditLog
 from ..services.ml_pipeline import detect_and_embed, embedding_to_bytes
 from ..services.clustering import match_selfie_to_cluster
 from ..services.storage import generate_presigned_url
+from ..services.selfie_quality import SelfieQualityError, select_selfie_face
 from ..config import get_settings
 
 settings = get_settings()
 router = APIRouter(prefix="/public", tags=["Public"])
+_rate_limit_redis = Redis.from_url(settings.REDIS_URL, decode_responses=True)
+
+
+async def _enforce_scan_rate_limit(request: Request, event_id: uuid.UUID) -> None:
+    client_ip = request.client.host if request.client else "unknown"
+    key = f"scan-rate:{event_id}:{client_ip}"
+    try:
+        count = await _rate_limit_redis.incr(key)
+        if count == 1:
+            await _rate_limit_redis.expire(key, 3600)
+        if count > settings.SCAN_RATE_LIMIT:
+            ttl = max(1, await _rate_limit_redis.ttl(key))
+            raise HTTPException(
+                status_code=429,
+                detail="Too many selfie scans. Please try again later.",
+                headers={"Retry-After": str(ttl)},
+            )
+    except HTTPException:
+        raise
+    except RedisError as exc:
+        print(f"Scan rate-limit check unavailable: {exc}")
 
 
 @router.post("/validate-code")
@@ -59,6 +84,8 @@ async def public_selfie_scan(
     if not event:
         raise HTTPException(status_code=404, detail="Event not found. Please check the access code.")
 
+    await _enforce_scan_rate_limit(request, event.id)
+
     # Validate image type
     if selfie.content_type not in settings.ALLOWED_IMAGE_TYPES:
         raise HTTPException(status_code=422, detail="Please upload a JPEG photo for your selfie.")
@@ -68,12 +95,15 @@ async def public_selfie_scan(
         raise HTTPException(status_code=413, detail="Image too large. Max size is 25 MB.")
 
     # Detect face
-    faces = detect_and_embed(image_bytes)
-    if not faces:
-        raise HTTPException(status_code=422, detail="No face detected. Please take a clear selfie with your face visible.")
-
-    # Use best quality face
-    best_face = max(faces, key=lambda f: f.quality_score)
+    faces = await run_in_threadpool(
+        detect_and_embed,
+        image_bytes,
+        selfie.filename or "selfie.jpg",
+    )
+    try:
+        best_face = select_selfie_face(faces)
+    except SelfieQualityError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     # Match against event clusters
     matched_cluster_id, distance = await match_selfie_to_cluster(

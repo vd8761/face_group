@@ -8,12 +8,16 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import delete, select, func
 
 from ..database import get_db
-from ..models import Event, User, Photo, FaceCluster, Subscription, SubscriptionStatus
+from ..models import (
+    Event, User, Photo, PhotoStatus, FaceCluster, FaceDetection,
+    Subscription, SubscriptionStatus,
+)
 from ..auth import require_organizer, get_current_user, get_current_tenant
 from ..schemas import EventCreate, EventResponse, EventUpdate, MessageResponse
+from ..services.storage_cleanup import collect_photo_assets, delete_asset_keys
 
 router = APIRouter(prefix="/events", tags=["Events"])
 
@@ -25,20 +29,46 @@ def generate_access_code(length: int = 8) -> str:
 
 
 async def _event_response(event: Event, db: AsyncSession) -> EventResponse:
-    photo_count = (await db.execute(
-        select(func.count(Photo.id)).where(Photo.event_id == event.id)
-    )).scalar()
-    processed_count = (await db.execute(
-        select(func.count(Photo.id)).where(Photo.event_id == event.id, Photo.status == "done")
-    )).scalar()
+    photo_counts = (await db.execute(
+        select(
+            func.count(Photo.id),
+            func.count(Photo.id).filter(Photo.status == PhotoStatus.done),
+            func.count(Photo.id).filter(Photo.status == PhotoStatus.failed),
+            func.count(Photo.id).filter(Photo.status == PhotoStatus.queued),
+            func.count(Photo.id).filter(Photo.status == PhotoStatus.processing),
+        ).where(Photo.event_id == event.id)
+    )).one()
+    photo_count, processed_count, failed_count, queued_count, processing_count = (
+        int(value or 0) for value in photo_counts
+    )
+    from ..services.ml_pipeline import get_pipeline_version
+
+    current_pipeline = get_pipeline_version()
     cluster_count = (await db.execute(
-        select(func.count(FaceCluster.id)).where(FaceCluster.event_id == event.id)
-    )).scalar()
+        select(func.count(FaceCluster.id)).where(
+            FaceCluster.event_id == event.id,
+            FaceCluster.pipeline_version == current_pipeline,
+        )
+    )).scalar() or 0
+    legacy_face_count = (await db.execute(
+        select(func.count(FaceDetection.id))
+        .join(Photo, Photo.id == FaceDetection.photo_id)
+        .where(
+            Photo.event_id == event.id,
+            FaceDetection.pipeline_version != current_pipeline,
+        )
+    )).scalar() or 0
     return EventResponse(
         **{k: getattr(event, k) for k in ["id", "name", "description", "access_code", "is_active", "created_at"]},
         photo_count=photo_count,
         processed_count=processed_count,
+        failed_count=failed_count,
+        queued_count=queued_count,
+        processing_count=processing_count,
         cluster_count=cluster_count,
+        face_pipeline_version=current_pipeline,
+        legacy_face_count=legacy_face_count,
+        needs_face_rebuild=legacy_face_count > 0,
     )
 
 
@@ -153,5 +183,31 @@ async def delete_event(
     event = result.scalar_one_or_none()
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
-    await db.delete(event)
+
+    photos_result = await db.execute(select(Photo).where(Photo.event_id == event_id))
+    photos = photos_result.scalars().all()
+    asset_keys, deleted_bytes = await collect_photo_assets(db, photos)
+
+    if deleted_bytes:
+        sub_result = await db.execute(
+            select(Subscription).where(Subscription.tenant_id == current_user.tenant_id)
+        )
+        sub = sub_result.scalar_one_or_none()
+        if sub:
+            sub.current_storage_bytes = max(
+                0,
+                (sub.current_storage_bytes or 0) - deleted_bytes,
+            )
+
+    # Let the database's ON DELETE CASCADE constraints remove child rows.
+    await db.execute(
+        delete(Event)
+        .where(Event.id == event_id)
+        .execution_options(synchronize_session=False)
+    )
+    await db.commit()
+    try:
+        await delete_asset_keys(asset_keys)
+    except Exception as exc:
+        print(f"Deferred event storage cleanup failed: {exc}")
     return MessageResponse(message="Event and all associated data deleted")

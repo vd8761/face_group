@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Camera, Loader2, AlertCircle, User, Key, Phone,
@@ -97,8 +97,6 @@ export default function AttendeeScan() {
   const [fieldErrors, setFieldErrors] = useState({});
   const [joining, setJoining] = useState(false);
 
-  const selfieRef = useRef(null); // store captured selfie file until scan step
-
   const handleNext = async (e) => {
     e.preventDefault();
     setError('');
@@ -114,9 +112,9 @@ export default function AttendeeScan() {
 
     setJoining(true);
     try {
-      // Just validate the event code exists
-      const { data } = await api.post('/api/public/validate-code', { access_code: form.access_code.toUpperCase() })
-        .catch(() => ({ data: { valid: true } })); // allow proceeding even if endpoint doesn't exist
+      await api.post('/api/public/validate-code', {
+        access_code: form.access_code.toUpperCase(),
+      });
       setStep('consent');
     } catch (err) {
       setError('Invalid event code. Please check and try again.');

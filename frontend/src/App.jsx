@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
+import { ProcessingProvider } from './context/ProcessingContext';
 import { ProtectedRoute } from './ProtectedRoute';
 import Navbar from './components/Navbar';
 
@@ -16,9 +17,10 @@ export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
-          <Navbar />
-          <Routes>
+        <ProcessingProvider>
+          <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
+            <Navbar />
+            <Routes>
             {/* Public */}
             <Route path="/"        element={<Landing />} />
             <Route path="/login"   element={<Login />} />
@@ -44,8 +46,9 @@ export default function App() {
                 <EventManager />
               </ProtectedRoute>
             } />
-          </Routes>
-        </div>
+            </Routes>
+          </div>
+        </ProcessingProvider>
       </AuthProvider>
     </BrowserRouter>
   );

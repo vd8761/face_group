@@ -5,22 +5,23 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-import io
-import zipfile
-import httpx
+from sqlalchemy import desc, func, select
+from pydantic import BaseModel, Field
 
 from ..database import get_db
 from ..models import (
-    User, Event, Photo, FaceDetection, FaceCluster, SelfieScan,
+    User, Event, Photo, PhotoStatus, FaceDetection, FaceCluster, SelfieScan,
     ConsentRecord, AuditLog, UserRole
 )
 from ..auth import require_attendee, require_organizer, get_current_user
-from ..services.ml_pipeline import detect_and_embed, embedding_to_bytes
+from ..services.ml_pipeline import detect_and_embed, embedding_to_bytes, get_pipeline_version
 from ..services.clustering import match_selfie_to_cluster, merge_clusters
 from ..services.storage import generate_presigned_url
+from ..services.selfie_quality import SelfieQualityError, select_selfie_face
+from ..services.zip_stream import stream_zip
 from ..schemas import (
     SelfieScanResponse, PhotoResponse, ClusterResponse, ClusterMergeRequest,
     DeleteSelfieResponse, ConsentRequest, ConsentResponse, MessageResponse
@@ -29,6 +30,32 @@ from ..config import get_settings
 
 settings = get_settings()
 router = APIRouter(prefix="/faces", tags=["Faces"])
+
+
+class PersonLabelUpdate(BaseModel):
+    """Organizer correction for the human-friendly People view."""
+
+    label: str | None = Field(default=None, max_length=200)
+
+
+async def _get_managed_event(
+    event_id: uuid.UUID,
+    current_user: User,
+    db: AsyncSession,
+    *,
+    active_only: bool = False,
+) -> Event:
+    query = select(Event).where(Event.id == event_id)
+    if active_only:
+        query = query.where(Event.is_active == True)
+    if current_user.role != UserRole.super_admin:
+        query = query.where(Event.tenant_id == current_user.tenant_id)
+
+    result = await db.execute(query)
+    event = result.scalar_one_or_none()
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+    return event
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -42,6 +69,7 @@ async def record_consent(
     db: AsyncSession = Depends(get_db),
 ):
     """Record biometric consent before selfie scan (SEC-7)."""
+    await _get_managed_event(body.event_id, current_user, db, active_only=True)
     consent = ConsentRecord(
         user_id=current_user.id,
         event_id=body.event_id,
@@ -79,12 +107,7 @@ async def selfie_scan(
         raise HTTPException(status_code=403, detail="Consent required before face scan.")
 
     # Verify event exists and is accessible to this tenant
-    event_result = await db.execute(
-        select(Event).where(Event.id == event_id, Event.is_active == True)
-    )
-    event = event_result.scalar_one_or_none()
-    if not event:
-        raise HTTPException(status_code=404, detail="Event not found or inactive")
+    event = await _get_managed_event(event_id, current_user, db, active_only=True)
 
     # Read selfie image
     if selfie.content_type not in settings.ALLOWED_IMAGE_TYPES:
@@ -95,12 +118,15 @@ async def selfie_scan(
         raise HTTPException(status_code=413, detail="Image too large")
 
     # Detect face in selfie
-    faces = detect_and_embed(image_bytes)
-    if not faces:
-        raise HTTPException(status_code=422, detail="No face detected in the submitted image")
-
-    # Use the highest-quality face
-    best_face = max(faces, key=lambda f: f.quality_score)
+    faces = await run_in_threadpool(
+        detect_and_embed,
+        image_bytes,
+        selfie.filename or "selfie.jpg",
+    )
+    try:
+        best_face = select_selfie_face(faces)
+    except SelfieQualityError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     # Match against event clusters
     matched_cluster_id, distance = await match_selfie_to_cluster(
@@ -113,6 +139,7 @@ async def selfie_scan(
         event_id=event_id,
         matched_cluster_id=matched_cluster_id,
         embedding=embedding_to_bytes(best_face.embedding),
+        pipeline_version=get_pipeline_version(),
         match_confidence=round(1.0 - distance, 4),
     )
     db.add(scan)
@@ -213,36 +240,112 @@ async def list_clusters(
     current_user: User = Depends(require_organizer),
     db: AsyncSession = Depends(get_db),
 ):
+    await _get_managed_event(event_id, current_user, db)
+    pipeline_version = get_pipeline_version()
     result = await db.execute(
-        select(FaceCluster).where(FaceCluster.event_id == event_id).order_by(FaceCluster.member_count.desc())
+        select(FaceCluster)
+        .where(
+            FaceCluster.event_id == event_id,
+            FaceCluster.pipeline_version == pipeline_version,
+        )
+        .order_by(FaceCluster.member_count.desc())
     )
     clusters = result.scalars().all()
+    if not clusters:
+        return []
+
+    cluster_ids = [cluster.id for cluster in clusters]
+    photo_counts = {
+        cluster_id: int(count or 0)
+        for cluster_id, count in (await db.execute(
+            select(
+                FaceDetection.cluster_id,
+                func.count(func.distinct(FaceDetection.photo_id)),
+            )
+            .where(FaceDetection.cluster_id.in_(cluster_ids))
+            .group_by(FaceDetection.cluster_id)
+        )).all()
+    }
+    ranked_faces = (
+        select(
+            FaceDetection.cluster_id.label("cluster_id"),
+            FaceDetection.face_key.label("face_key"),
+            Photo.thumbnail_key.label("photo_thumbnail_key"),
+            func.row_number().over(
+                partition_by=FaceDetection.cluster_id,
+                order_by=(
+                    desc(func.coalesce(FaceDetection.quality_score, 0.0)),
+                    FaceDetection.detection_confidence.desc(),
+                    FaceDetection.id,
+                ),
+            ).label("sample_rank"),
+        )
+        .join(Photo, Photo.id == FaceDetection.photo_id)
+        .where(FaceDetection.cluster_id.in_(cluster_ids))
+        .subquery()
+    )
+    thumbnail_rows = (await db.execute(
+        select(
+            ranked_faces.c.cluster_id,
+            ranked_faces.c.face_key,
+            ranked_faces.c.photo_thumbnail_key,
+        )
+        .where(ranked_faces.c.sample_rank <= 3)
+        .order_by(ranked_faces.c.cluster_id, ranked_faces.c.sample_rank)
+    )).all()
+    thumbnails_by_cluster: dict[uuid.UUID, list[str]] = {}
+    for cluster_id, face_key, photo_thumbnail_key in thumbnail_rows:
+        key = face_key or photo_thumbnail_key
+        if key:
+            thumbnails_by_cluster.setdefault(cluster_id, []).append(
+                generate_presigned_url(key, expires_in=3600)
+            )
 
     out = []
     for cluster in clusters:
-        # Get sample thumbnails (up to 3)
-        det_result = await db.execute(
-            select(FaceDetection).where(FaceDetection.cluster_id == cluster.id).limit(3)
-        )
-        detections = det_result.scalars().all()
-        thumbnails = []
-        for det in detections:
-            if det.face_key:
-                thumbnails.append(generate_presigned_url(det.face_key, expires_in=3600))
-            else:
-                photo_result = await db.execute(select(Photo).where(Photo.id == det.photo_id))
-                photo = photo_result.scalar_one_or_none()
-                if photo and photo.thumbnail_key:
-                    thumbnails.append(generate_presigned_url(photo.thumbnail_key, expires_in=3600))
-
         out.append(ClusterResponse(
             id=cluster.id,
             member_count=cluster.member_count,
+            photo_count=photo_counts.get(cluster.id, 0),
             label=cluster.label,
             updated_at=cluster.updated_at,
-            sample_thumbnails=thumbnails,
+            sample_thumbnails=thumbnails_by_cluster.get(cluster.id, []),
         ))
     return out
+
+
+@router.patch("/events/{event_id}/clusters/{cluster_id}")
+async def update_person_label(
+    event_id: uuid.UUID,
+    cluster_id: uuid.UUID,
+    body: PersonLabelUpdate,
+    current_user: User = Depends(require_organizer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Name or clear a person without changing their face assignments."""
+    event = await _get_managed_event(event_id, current_user, db)
+    result = await db.execute(
+        select(FaceCluster).where(
+            FaceCluster.id == cluster_id,
+            FaceCluster.event_id == event.id,
+        )
+    )
+    cluster = result.scalar_one_or_none()
+    if not cluster:
+        raise HTTPException(status_code=404, detail="Person not found")
+
+    label = body.label.strip() if body.label else None
+    cluster.label = label or None
+    db.add(AuditLog(
+        user_id=current_user.id,
+        tenant_id=event.tenant_id,
+        action="person.rename",
+        resource_type="face_cluster",
+        resource_id=str(cluster.id),
+        payload={"label": cluster.label},
+    ))
+    await db.flush()
+    return {"id": str(cluster.id), "label": cluster.label}
 
 
 @router.get("/events/{event_id}/clusters/{cluster_id}/photos", response_model=list[PhotoResponse])
@@ -253,11 +356,21 @@ async def get_cluster_photos(
     db: AsyncSession = Depends(get_db),
 ):
     """Retrieve all full-sized photos mapped to a specific face cluster."""
-    det_result = await db.execute(
-        select(FaceDetection).where(FaceDetection.cluster_id == cluster_id)
+    await _get_managed_event(event_id, current_user, db)
+    cluster_result = await db.execute(
+        select(FaceCluster).where(
+            FaceCluster.id == cluster_id,
+            FaceCluster.event_id == event_id,
+        )
     )
-    detections = det_result.scalars().all()
-    photo_ids = list({d.photo_id for d in detections})
+    if not cluster_result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Cluster not found")
+
+    photo_ids = list((await db.execute(
+        select(FaceDetection.photo_id)
+        .where(FaceDetection.cluster_id == cluster_id)
+        .distinct()
+    )).scalars().all())
     
     if not photo_ids:
         return []
@@ -297,52 +410,50 @@ async def download_cluster_photos_zip(
     db: AsyncSession = Depends(get_db),
 ):
     """Generate and stream a ZIP file containing all photos for this cluster."""
-    det_result = await db.execute(
-        select(FaceDetection).where(FaceDetection.cluster_id == cluster_id)
+    await _get_managed_event(event_id, current_user, db)
+    cluster_res = await db.execute(
+        select(FaceCluster).where(
+            FaceCluster.id == cluster_id,
+            FaceCluster.event_id == event_id,
+        )
     )
-    detections = det_result.scalars().all()
-    photo_ids = list({d.photo_id for d in detections})
+    cluster = cluster_res.scalar_one_or_none()
+    if not cluster:
+        raise HTTPException(status_code=404, detail="Cluster not found")
+
+    photo_ids = list((await db.execute(
+        select(FaceDetection.photo_id)
+        .where(FaceDetection.cluster_id == cluster_id)
+        .distinct()
+    )).scalars().all())
     
     if not photo_ids:
         raise HTTPException(status_code=404, detail="No photos found for this cluster.")
 
-    photos = []
-    for pid in photo_ids:
-        pr = await db.execute(select(Photo).where(Photo.id == pid))
-        p = pr.scalar_one_or_none()
-        if p and p.original_key:
-            photos.append(p)
+    photos = (await db.execute(
+        select(Photo)
+        .where(Photo.id.in_(photo_ids), Photo.original_key != "")
+        .order_by(Photo.uploaded_at, Photo.id)
+    )).scalars().all()
 
     if not photos:
         raise HTTPException(status_code=404, detail="No original photos found.")
 
-    cluster_res = await db.execute(select(FaceCluster).where(FaceCluster.id == cluster_id))
-    cluster = cluster_res.scalar_one_or_none()
-    cluster_name = cluster.label if cluster and cluster.label else f"Person_{str(cluster_id)[:8]}"
-
-    zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
-        async with httpx.AsyncClient() as client:
-            for i, p in enumerate(photos):
-                url = generate_presigned_url(p.original_key, expires_in=3600)
-                if not url:
-                    continue
-                try:
-                    resp = await client.get(url)
-                    if resp.status_code == 200:
-                        # try to keep original extension if possible
-                        ext = p.filename.split('.')[-1] if '.' in p.filename else 'jpg'
-                        filename = f"photo_{i+1}.{ext}"
-                        zip_file.writestr(filename, resp.content)
-                except Exception as e:
-                    print(f"Failed to download photo for zip: {e}")
-                    pass
-
-    zip_buffer.seek(0)
+    cluster_name = cluster.label or f"Person_{str(cluster_id)[:8]}"
+    safe_cluster_name = "".join(
+        char if char.isascii() and (char.isalnum() or char in "-_ ") else "_"
+        for char in cluster_name
+    ).strip()[:80] or "Person"
+    pairs = [
+        (photo.original_key, photo.filename or f"photo-{index}.jpg")
+        for index, photo in enumerate(photos, start=1)
+    ]
     return StreamingResponse(
-        zip_buffer,
+        stream_zip(pairs),
         media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename={cluster_name}.zip"}
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_cluster_name}.zip"'
+        },
     )
 
 
@@ -354,7 +465,34 @@ async def merge_two_clusters(
     db: AsyncSession = Depends(get_db),
 ):
     """Admin: merge source cluster into target (corrects misclassification)."""
-    await merge_clusters(body.source_cluster_id, body.target_cluster_id, db)
+    if body.source_cluster_id == body.target_cluster_id:
+        raise HTTPException(status_code=422, detail="Choose two different clusters")
+
+    cluster_result = await db.execute(
+        select(FaceCluster).where(
+            FaceCluster.id.in_([body.source_cluster_id, body.target_cluster_id])
+        )
+    )
+    clusters = cluster_result.scalars().all()
+    if len(clusters) != 2 or clusters[0].event_id != clusters[1].event_id:
+        raise HTTPException(status_code=404, detail="Clusters not found in the same event")
+    await _get_managed_event(clusters[0].event_id, current_user, db)
+
+    try:
+        merged = await merge_clusters(body.source_cluster_id, body.target_cluster_id, db)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    db.add(AuditLog(
+        user_id=current_user.id,
+        tenant_id=current_user.tenant_id,
+        action="faces.merge_people",
+        resource_type="event",
+        resource_id=str(merged.event_id),
+        payload={
+            "source_cluster_id": str(body.source_cluster_id),
+            "target_cluster_id": str(body.target_cluster_id),
+        },
+    ))
     return MessageResponse(message="Clusters merged successfully")
 
 
@@ -368,13 +506,25 @@ async def trigger_recluster(
     """Admin: manually trigger re-clustering for an event."""
     from ..workers.tasks import recluster_event_task
     
-    # Verify event exists
-    event_res = await db.execute(select(Event).where(Event.id == event_id))
-    if not event_res.scalar_one_or_none():
-        raise HTTPException(status_code=404, detail="Event not found")
+    await _get_managed_event(event_id, current_user, db)
+    pending = (await db.execute(
+        select(func.count(Photo.id)).where(
+            Photo.event_id == event_id,
+            Photo.status.in_([PhotoStatus.queued, PhotoStatus.processing]),
+        )
+    )).scalar() or 0
+    if pending:
+        raise HTTPException(
+            status_code=409,
+            detail="Wait for photo processing to finish before rebuilding People groups.",
+        )
         
     try:
-        recluster_event_task.delay(str(event_id))
+        await run_in_threadpool(
+            recluster_event_task.apply_async,
+            args=[str(event_id)],
+            queue="face-v2",
+        )
     except Exception as e:
         print(f"Celery dispatch failed: {e}. Falling back to BackgroundTasks.")
         from ..services.clustering import recluster_event
@@ -384,6 +534,8 @@ async def trigger_recluster(
         async def _recluster_bg():
             async with async_session_maker() as db2:
                 await recluster_event(event_id, db2)
+                from ..services.batch_tracking import finalize_event_batches
+                await finalize_event_batches(db2, event_id=event_id)
                 await db2.commit()
 
         background_tasks.add_task(_recluster_bg)

@@ -1,53 +1,58 @@
-"""
-Streaming ZIP builder — assembles a ZIP archive on the fly without buffering
-the entire archive in memory. This keeps memory usage flat regardless of
-how many photos are selected (FR-4.4).
-"""
-import io
+"""Build valid ZIP archives on local disk and stream them in bounded chunks."""
+import os
+import tempfile
 import zipfile
+from pathlib import Path
 from typing import AsyncIterator, List
+
+from fastapi.concurrency import run_in_threadpool
+
 from ..services.storage import stream_object
 
 
 async def stream_zip(
     keys_and_names: List[tuple[str, str]],
-    chunk_size: int = 1024 * 64,  # 64 KB chunks
+    chunk_size: int = 1024 * 64,
 ) -> AsyncIterator[bytes]:
-    """
-    Yields bytes of a ZIP file built from (r2_key, filename) pairs.
-    Uses a memory buffer that is flushed after each file is added,
-    so peak memory is proportional to one photo, not the total archive.
+    """Yield a ZIP while keeping image data out of application memory."""
+    fd, archive_path = tempfile.mkstemp(prefix="photogroup-", suffix=".zip")
+    os.close(fd)
 
-    Usage:
-        return StreamingResponse(
-            stream_zip(pairs),
-            media_type="application/zip",
-            headers={"Content-Disposition": "attachment; filename=photos.zip"}
-        )
-    """
-    buf = io.BytesIO()
+    try:
+        used_names: set[str] = set()
+        with zipfile.ZipFile(
+            archive_path,
+            mode="w",
+            compression=zipfile.ZIP_STORED,
+            allowZip64=True,
+        ) as archive:
+            for index, (r2_key, filename) in enumerate(keys_and_names, start=1):
+                safe_name = Path(filename).name or f"photo-{index}.jpg"
+                if safe_name in used_names:
+                    stem = Path(safe_name).stem
+                    suffix = Path(safe_name).suffix
+                    safe_name = f"{stem}-{index}{suffix}"
+                used_names.add(safe_name)
 
-    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_STORED, allowZip64=True) as zf:
-        for r2_key, filename in keys_and_names:
-            # Write each file in chunks to limit memory
-            zinfo = zipfile.ZipInfo(filename=filename)
-            zinfo.compress_type = zipfile.ZIP_STORED
+                body = await run_in_threadpool(stream_object, r2_key)
+                try:
+                    with archive.open(safe_name, mode="w") as destination:
+                        while True:
+                            chunk = await run_in_threadpool(body.read, chunk_size)
+                            if not chunk:
+                                break
+                            await run_in_threadpool(destination.write, chunk)
+                finally:
+                    await run_in_threadpool(body.close)
 
-            body = stream_object(r2_key)
-            file_data = body.read()  # R2 streaming body
-
-            zf.writestr(zinfo, file_data)
-
-            # Yield what has been written to the buffer so far
-            buf.seek(0)
-            data = buf.read()
-            if data:
-                yield data
-            buf.seek(0)
-            buf.truncate(0)
-
-    # Yield any remaining bytes (ZIP end-of-central-directory record)
-    buf.seek(0)
-    remaining = buf.read()
-    if remaining:
-        yield remaining
+        with open(archive_path, "rb") as archive_file:
+            while True:
+                chunk = await run_in_threadpool(archive_file.read, chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+    finally:
+        try:
+            os.remove(archive_path)
+        except FileNotFoundError:
+            pass

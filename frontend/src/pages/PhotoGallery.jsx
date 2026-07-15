@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Download, CheckSquare, Square, Trash2, Images, AlertTriangle,
+  Download, CheckSquare, Square, Trash2, AlertTriangle,
   Loader2, X, Camera
 } from 'lucide-react';
 import api from '../api/client';
@@ -12,9 +12,8 @@ export default function PhotoGallery() {
   const location = useLocation();
   const navigate = useNavigate();
   const scanResult = location.state?.scanResult;
-  const eventId    = location.state?.eventId;
 
-  const [photos, setPhotos]     = useState(scanResult?.photos || []);
+  const [photos] = useState(scanResult?.photos || []);
   const [selected, setSelected] = useState(new Set());
   const [downloading, setDownloading] = useState(false);
   const [deletingScan, setDeletingScan] = useState(false);
@@ -29,7 +28,8 @@ export default function PhotoGallery() {
   const togglePhoto = (id) => {
     setSelected(prev => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   };
@@ -53,13 +53,6 @@ export default function PhotoGallery() {
     } catch (e) {
       alert('Download failed. Please try again.');
     } finally { setDownloading(false); }
-  };
-
-  const downloadSingle = async (photo) => {
-    try {
-      const { data } = await api.get(`/api/photos/${photo.id}/download`);
-      window.open(data.url, '_blank');
-    } catch (e) { alert('Download failed.'); }
   };
 
   const deleteSelfie = async () => {

@@ -1,5 +1,5 @@
 services:
-  # ── FastAPI Web Service + Celery Worker (same container) ──────────────────
+  # ── FastAPI web service ───────────────────────────────────────────────────
   - type: web
     name: photogroup-api
     runtime: docker
@@ -25,7 +25,7 @@ services:
         value: face-group
       - key: REDIS_URL
         sync: false          # Paste your Upstash Redis URL (Pay as You Go)
-      - key: GOOGLE_API_KEY
+      - key: GOOGLE_DRIVE_API_KEY
         sync: false          # Google Drive API key for folder imports
       - key: SENTRY_DSN
         sync: false          # Optional: Sentry error tracking DSN
@@ -34,3 +34,39 @@ services:
       - key: DEBUG
         value: "false"
     healthCheckPath: /api/health
+
+  # Dedicated durable processor. Keeping it separate from Uvicorn ensures
+  # queued batches continue even when the web service restarts or scales.
+  - type: worker
+    name: photogroup-worker
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    dockerCommand: /worker-start.sh
+    plan: pro
+    maxShutdownDelaySeconds: 300
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: SUPER_ADMIN_EMAIL
+        value: admin@photogroup.app
+      - key: SUPER_ADMIN_PASSWORD
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET_NAME
+        value: face-group
+      - key: REDIS_URL
+        sync: false
+      - key: GOOGLE_DRIVE_API_KEY
+        sync: false
+      - key: SENTRY_DSN
+        sync: false
+      - key: DEBUG
+        value: "false"

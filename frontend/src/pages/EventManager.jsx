@@ -3,11 +3,14 @@ import { useParams, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
   ArrowLeft, Upload, Users, Image, RefreshCw, Merge, Loader2,
-  CheckCircle2, AlertCircle, Clock, AlertTriangle, Key, Share2, X, Download
+  CheckCircle2, AlertCircle, AlertTriangle, Key, Share2, X, Download,
+  Search, Pencil, Check
 } from 'lucide-react';
-import api from '../api/client';
+import api, { getApiErrorMessage } from '../api/client';
 import PhotoUpload from '../components/PhotoUpload';
 import ConfirmActionModal from '../components/ConfirmActionModal';
+import ProcessingOverview from '../components/processing/ProcessingOverview';
+import { isRunningBatch, useEventProcessing } from '../context/ProcessingContext';
 
 const StatusBadge = ({ status }) => {
   const map = {
@@ -22,6 +25,7 @@ const StatusBadge = ({ status }) => {
 
 export default function EventManager() {
   const { eventId } = useParams();
+  const processing = useEventProcessing(eventId);
   const [event, setEvent]     = useState(null);
   const [photos, setPhotos]   = useState([]);
   const [totalServerPhotos, setTotalServerPhotos] = useState(0);
@@ -32,6 +36,13 @@ export default function EventManager() {
   const [merging, setMerging] = useState(false);
   const [mergeIds, setMergeIds] = useState([]);
   const [isMergeMode, setIsMergeMode] = useState(false);
+  const [peopleSearch, setPeopleSearch] = useState('');
+  const [peopleSort, setPeopleSort] = useState('count');
+  const [editingClusterId, setEditingClusterId] = useState(null);
+  const [editingLabel, setEditingLabel] = useState('');
+  const [renamingClusterId, setRenamingClusterId] = useState(null);
+  const [peopleError, setPeopleError] = useState('');
+  const hasLiveBatch = processing.batches.some(isRunningBatch);
   
   // Cluster Detail Modal State
   const [selectedCluster, setSelectedCluster] = useState(null);
@@ -71,26 +82,36 @@ export default function EventManager() {
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
-  // Poll photos every 5s while any are processing
+  // Keep photo rows and People refreshed while the realtime stream reports work.
   useEffect(() => {
-    const processing = photos.some(p => p.status === 'queued' || p.status === 'processing');
-    if (!processing) return;
+    const hasProcessingPhotos = photos.some(p => p.status === 'queued' || p.status === 'processing');
+    if (!hasProcessingPhotos && !hasLiveBatch) return;
     const timer = setInterval(() => { loadPhotos(); loadClusters(); loadEvent(); }, 5000);
     return () => clearInterval(timer);
-  }, [photos, loadPhotos, loadClusters, loadEvent]);
+  }, [photos, loadPhotos, loadClusters, loadEvent, hasLiveBatch]);
 
   const triggerRecluster = async () => {
     setReClustering(true);
+    setPeopleError('');
     try {
       await api.post(`/api/faces/events/${eventId}/recluster`);
       setTimeout(() => { loadClusters(); setReClustering(false); }, 3000);
-    } catch (e) { setReClustering(false); }
+    } catch (error) {
+      setPeopleError(getApiErrorMessage(error, 'Could not rebuild People groups.'));
+      setReClustering(false);
+    }
   };
 
   const handleDeleteConfirm = async () => {
     setDeleteModal(prev => ({ ...prev, isDeleting: true }));
     try {
-      if (deleteModal.type === 'all') {
+      if (deleteModal.type === 'rebuild') {
+        const { data } = await api.post(`/api/photos/events/${eventId}/reprocess-faces`);
+        setActiveTab('photos');
+        setPeopleError('');
+        setTimeout(loadAll, 1000);
+        alert(data.message || 'Face groups are being rebuilt.');
+      } else if (deleteModal.type === 'all') {
         await api.delete(`/api/photos/events/${eventId}/clear?status_filter=all`);
       } else if (deleteModal.type === 'stuck') {
         await api.delete(`/api/photos/events/${eventId}/clear?status_filter=queued`);
@@ -98,7 +119,7 @@ export default function EventManager() {
       }
       loadPhotos(); loadClusters(); loadEvent();
     } catch (e) {
-      alert('Error clearing photos: ' + (e?.response?.data?.detail || e.message));
+      alert(getApiErrorMessage(e, 'The requested action could not be completed.'));
     } finally {
       setDeleteModal({ isOpen: false, type: null, isDeleting: false });
     }
@@ -141,6 +162,23 @@ export default function EventManager() {
     }
   };
 
+  const renameCluster = async (cluster) => {
+    const label = editingLabel.trim();
+    setRenamingClusterId(cluster.id);
+    setPeopleError('');
+    try {
+      const { data } = await api.patch(`/api/faces/events/${eventId}/clusters/${cluster.id}`, { label: label || null });
+      setClusters(prev => prev.map(item => item.id === cluster.id ? { ...item, ...data, label: data?.label ?? label } : item));
+      setSelectedCluster(prev => prev?.id === cluster.id ? { ...prev, ...data, label: data?.label ?? label } : prev);
+      setEditingClusterId(null);
+      setEditingLabel('');
+    } catch (e) {
+      setPeopleError(getApiErrorMessage(e, 'Could not rename this person.'));
+    } finally {
+      setRenamingClusterId(null);
+    }
+  };
+
   const copyCode = () => {
     if (event?.access_code) { navigator.clipboard.writeText(event.access_code); }
   };
@@ -153,7 +191,25 @@ export default function EventManager() {
   );
 
   const doneCount   = event?.processed_count || photos.filter(p => p.status === 'done').length;
-  const failedCount = photos.filter(p => p.status === 'failed').length;
+  const failedCount = event?.failed_count != null
+    ? Number(event.failed_count) || 0
+    : photos.filter(p => p.status === 'failed').length;
+  const terminalCount = Math.min(totalServerPhotos, doneCount + failedCount);
+  const fallbackFinished = totalServerPhotos > 0 && terminalCount >= totalServerPhotos;
+  const visibleClusters = clusters
+    .filter((cluster) => {
+      const fallbackName = `Person ${cluster.id.slice(0, 6)}`;
+      return `${cluster.label || fallbackName}`.toLowerCase().includes(peopleSearch.trim().toLowerCase());
+    })
+    .sort((a, b) => {
+      const aCount = a.photo_count ?? a.member_count ?? 0;
+      const bCount = b.photo_count ?? b.member_count ?? 0;
+      if (peopleSort === 'name') {
+        return (a.label || `Person ${a.id}`).localeCompare(b.label || `Person ${b.id}`);
+      }
+      if (peopleSort === 'recent') return new Date(b.updated_at || 0) - new Date(a.updated_at || 0);
+      return bCount - aCount;
+    });
 
   return (
     <div className="page">
@@ -179,7 +235,7 @@ export default function EventManager() {
             { label: 'Total Photos',  value: totalServerPhotos, icon: Image },
             { label: 'Processed',     value: doneCount,         icon: CheckCircle2, color: 'var(--success)' },
             { label: 'Failed',        value: failedCount,       icon: AlertCircle,  color: failedCount > 0 ? 'var(--error)' : undefined },
-            { label: 'Face Groups',   value: clusters.length,   icon: Users,        color: 'var(--accent-light)' },
+            { label: 'People',        value: clusters.length,   icon: Users,        color: 'var(--accent-light)' },
           ].map(({ label, value, icon: Icon, color }) => (
             <div key={label} className="stat-card" style={{ padding: '1.125rem' }}>
               <div className="flex items-center gap-2 text-muted mb-1">
@@ -190,17 +246,33 @@ export default function EventManager() {
           ))}
         </div>
 
-        {/* Processing progress bar */}
-        {totalServerPhotos > 0 && (
-          <div className="card mb-6" style={{ padding: '1.125rem 1.5rem', background: doneCount === totalServerPhotos ? 'rgba(16, 185, 129, 0.05)' : undefined, borderColor: doneCount === totalServerPhotos ? 'rgba(16, 185, 129, 0.2)' : undefined }}>
+        {/* Live processing progress and resources */}
+        {processing.hasSnapshot && (
+          <div className="mb-6">
+            <ProcessingOverview
+              title={`${event?.name || 'Event'} processing`}
+              subtitle="Image detection, People grouping, throughput and application resources"
+              summary={processing.summary}
+              resources={processing.resources}
+              batches={processing.batches}
+              connectionState={processing.connectionState}
+              isStale={processing.isStale}
+              hasSnapshot={processing.hasSnapshot}
+              error={processing.error}
+              batchLimit={5}
+            />
+          </div>
+        )}
+        {totalServerPhotos > 0 && (!processing.hasSnapshot || processing.batches.length === 0) && (
+          <div className="card mb-6" style={{ padding: '1.125rem 1.5rem', background: fallbackFinished ? (failedCount ? 'rgba(245,158,11,0.06)' : 'rgba(16, 185, 129, 0.05)') : undefined, borderColor: fallbackFinished ? (failedCount ? 'rgba(245,158,11,0.24)' : 'rgba(16, 185, 129, 0.2)') : undefined }}>
             <div className="usage-bar-label mb-2">
-              <span className="font-semibold text-sm" style={{ color: doneCount === totalServerPhotos ? 'var(--success)' : undefined }}>
-                {doneCount === totalServerPhotos ? 'Processing Completed 🎉' : 'Processing Progress'}
+              <span className="font-semibold text-sm" style={{ color: fallbackFinished ? (failedCount ? '#b45309' : 'var(--success)') : undefined }}>
+                {fallbackFinished ? (failedCount ? 'Processing completed with errors' : 'Processing Completed 🎉') : 'Processing Progress'}
               </span>
-              <span className="text-sm text-muted">{doneCount} / {totalServerPhotos} photos done</span>
+              <span className="text-sm text-muted">{doneCount} done{failedCount ? ` · ${failedCount} failed` : ''} / {totalServerPhotos}</span>
             </div>
             <div className="progress-bar" style={{ height: 8 }}>
-              <div className="progress-bar-fill" style={{ width: `${totalServerPhotos > 0 ? (doneCount / totalServerPhotos) * 100 : 0}%`, background: doneCount === totalServerPhotos ? 'var(--success)' : undefined }} />
+              <div className="progress-bar-fill" style={{ width: `${totalServerPhotos > 0 ? (terminalCount / totalServerPhotos) * 100 : 0}%`, background: fallbackFinished ? (failedCount ? 'var(--warning)' : 'var(--success)') : undefined }} />
             </div>
           </div>
         )}
@@ -210,7 +282,7 @@ export default function EventManager() {
           {[
             { id: 'upload',   label: 'Upload Photos', icon: Upload },
             { id: 'photos',   label: `Photos (${totalServerPhotos})`, icon: Image },
-            { id: 'clusters', label: `Face Groups (${clusters.length})`, icon: Users },
+            { id: 'clusters', label: `People (${clusters.length})`, icon: Users },
           ].map(({ id, label, icon: Icon }) => (
             <button
               key={id}
@@ -240,12 +312,12 @@ export default function EventManager() {
             <div className="flex justify-between items-center mb-4">
               <span className="text-sm text-muted">
                 {totalServerPhotos} total &nbsp;·&nbsp;
-                <span style={{ color: 'var(--error)' }}>{failedCount} failed in latest view</span>
+                <span style={{ color: 'var(--error)' }}>{failedCount} failed</span>
                 &nbsp;·&nbsp;
                 <span style={{ color: 'var(--success)' }}>{doneCount} done</span>
               </span>
               <div className="flex items-center gap-2" style={{ flexWrap: 'wrap' }}>
-                {photos.some(p => p.status === 'failed' || p.status === 'queued' || p.status === 'processing') && (
+                {failedCount > 0 && (
                   <button
                     id="retry-failed-btn"
                     className="btn btn-primary btn-sm"
@@ -267,11 +339,11 @@ export default function EventManager() {
                         }
                       } finally {
                         btn.disabled = false;
-                        btn.textContent = `Retry Failed (${photos.filter(p => p.status === 'failed' || p.status === 'queued' || p.status === 'processing').length})`;
+                        btn.textContent = `Retry Failed (${failedCount})`;
                       }
                     }}
                   >
-                    <RefreshCw size={13} /> Retry Failed ({photos.filter(p => p.status === 'failed' || p.status === 'queued' || p.status === 'processing').length})
+                    <RefreshCw size={13} /> Retry Failed ({failedCount})
                   </button>
                 )}
                 <button 
@@ -310,12 +382,24 @@ export default function EventManager() {
           </motion.div>
         )}
 
-        {/* Clusters / Face groups tab */}
+        {/* People tab */}
         {activeTab === 'clusters' && (
           <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
             <div className="flex justify-between items-center mb-4" style={{ flexWrap: 'wrap', gap: '0.75rem' }}>
-              <span className="text-sm text-muted">{clusters.length} face groups detected</span>
+              <div>
+                <span className="text-sm font-semibold">People</span>
+                <p className="text-xs text-muted" style={{ margin: '0.15rem 0 0' }}>{clusters.length} people detected across this event</p>
+              </div>
               <div className="flex gap-2">
+                <button
+                  className={`btn btn-sm ${event?.needs_face_rebuild ? 'btn-primary' : 'btn-ghost'}`}
+                  onClick={() => setDeleteModal({ isOpen: true, type: 'rebuild', isDeleting: false })}
+                  disabled={hasLiveBatch || totalServerPhotos === 0}
+                  title={hasLiveBatch ? 'Wait for current processing to finish' : 'Re-run face detection and grouping for every original'}
+                >
+                  <RefreshCw size={13} />
+                  {event?.needs_face_rebuild ? 'Upgrade face groups' : 'Rebuild People'}
+                </button>
                 <button 
                   className={`btn btn-sm ${isMergeMode ? 'btn-secondary' : 'btn-ghost'}`} 
                   onClick={() => setIsMergeMode(!isMergeMode)}
@@ -329,12 +413,50 @@ export default function EventManager() {
                     Merge Selected
                   </button>
                 )}
-                <button className="btn btn-ghost btn-sm" onClick={triggerRecluster} disabled={reClustering}>
+                <button className="btn btn-ghost btn-sm" onClick={triggerRecluster} disabled={reClustering || hasLiveBatch}>
                   {reClustering ? <Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} /> : <RefreshCw size={13} />}
                   Re-cluster
                 </button>
               </div>
             </div>
+
+            {event?.needs_face_rebuild && (
+              <div className="card mb-4" style={{ background: 'rgba(245,158,11,0.08)', borderColor: 'rgba(245,158,11,0.25)', padding: '0.85rem 1rem' }}>
+                <div style={{ alignItems: 'flex-start', display: 'flex', gap: '0.65rem' }}>
+                  <AlertTriangle size={16} color="var(--warning)" style={{ flexShrink: 0, marginTop: 2 }} />
+                  <div>
+                    <div className="text-sm font-semibold">A newer face model is available</div>
+                    <p className="text-xs text-muted" style={{ margin: '0.2rem 0 0' }}>
+                      {event.legacy_face_count} legacy face record{event.legacy_face_count === 1 ? '' : 's'} must be reprocessed before they can safely match the new model.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="card mb-4" style={{ alignItems: 'center', display: 'flex', flexWrap: 'wrap', gap: '0.75rem', padding: '0.75rem' }}>
+              <div style={{ flex: '1 1 240px', position: 'relative' }}>
+                <Search size={14} color="var(--text-muted)" style={{ left: '0.75rem', pointerEvents: 'none', position: 'absolute', top: '50%', transform: 'translateY(-50%)' }} />
+                <input
+                  className="input"
+                  value={peopleSearch}
+                  onChange={(event) => setPeopleSearch(event.target.value)}
+                  placeholder="Search named or unnamed people"
+                  style={{ paddingLeft: '2.25rem' }}
+                />
+              </div>
+              <select className="input" value={peopleSort} onChange={(event) => setPeopleSort(event.target.value)} style={{ flex: '0 0 180px' }} aria-label="Sort people">
+                <option value="count">Most photos</option>
+                <option value="name">Name</option>
+                <option value="recent">Recently updated</option>
+              </select>
+            </div>
+
+            {peopleError && (
+              <div className="card mb-4" style={{ background: 'rgba(239,68,68,0.06)', borderColor: 'rgba(239,68,68,0.2)', color: 'var(--error)', fontSize: '0.8rem', padding: '0.75rem 1rem' }}>
+                {peopleError}
+              </div>
+            )}
 
             {mergeIds.length > 0 && (
               <div className="card mb-4" style={{ padding: '0.75rem 1rem', background: 'var(--accent-soft)', borderColor: 'rgba(124,58,237,0.3)' }}>
@@ -348,11 +470,16 @@ export default function EventManager() {
             {clusters.length === 0 ? (
               <div className="card text-center" style={{ padding: '3rem' }}>
                 <AlertTriangle size={40} color="var(--text-muted)" style={{ margin: '0 auto 1rem' }} />
-                <p className="text-secondary">No face groups yet. Upload and process photos first.</p>
+                <p className="text-secondary">No people yet. Upload photos and let face processing finish first.</p>
+              </div>
+            ) : visibleClusters.length === 0 ? (
+              <div className="card text-center" style={{ padding: '2.5rem' }}>
+                <Search size={32} color="var(--text-muted)" style={{ margin: '0 auto 0.75rem' }} />
+                <p className="text-secondary">No people match “{peopleSearch}”.</p>
               </div>
             ) : (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '1.5rem' }}>
-                {clusters.map((cluster) => (
+                {visibleClusters.map((cluster) => (
                   <div
                     key={cluster.id}
                     className={`cluster-card ${isMergeMode ? 'merge-mode' : ''}`}
@@ -376,10 +503,48 @@ export default function EventManager() {
                       </div>
                     )}
                     <div style={{ padding: '0.75rem 0.25rem 0', textAlign: 'center' }}>
-                      <div className="text-sm font-semibold truncate" title={cluster.label || `Person ${cluster.id.slice(0, 6)}`}>
-                        {cluster.label || `Person ${cluster.id.slice(0, 6)}`}
-                      </div>
-                      <div className="text-xs text-muted mt-1">{cluster.member_count} photos</div>
+                      {editingClusterId === cluster.id ? (
+                        <form
+                          onClick={(event) => event.stopPropagation()}
+                          onSubmit={(event) => { event.preventDefault(); renameCluster(cluster); }}
+                          style={{ display: 'flex', gap: '0.25rem' }}
+                        >
+                          <input
+                            className="input"
+                            value={editingLabel}
+                            onChange={(event) => setEditingLabel(event.target.value)}
+                            placeholder="Person name"
+                            maxLength={200}
+                            autoFocus
+                            style={{ minWidth: 0, padding: '0.35rem 0.45rem' }}
+                          />
+                          <button className="btn btn-primary btn-icon btn-sm" type="submit" disabled={renamingClusterId === cluster.id} aria-label="Save person name">
+                            {renamingClusterId === cluster.id ? <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} /> : <Check size={12} />}
+                          </button>
+                          <button className="btn btn-ghost btn-icon btn-sm" type="button" onClick={() => setEditingClusterId(null)} aria-label="Cancel rename"><X size={12} /></button>
+                        </form>
+                      ) : (
+                        <div style={{ alignItems: 'center', display: 'flex', gap: '0.25rem', justifyContent: 'center' }}>
+                          <div className="text-sm font-semibold truncate" title={cluster.label || `Person ${cluster.id.slice(0, 6)}`}>
+                            {cluster.label || `Person ${cluster.id.slice(0, 6)}`}
+                          </div>
+                          <button
+                            className="btn btn-ghost btn-icon btn-sm"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setEditingClusterId(cluster.id);
+                              setEditingLabel(cluster.label || '');
+                              setPeopleError('');
+                            }}
+                            title="Rename person"
+                            aria-label={`Rename ${cluster.label || 'person'}`}
+                            style={{ flexShrink: 0, padding: '0.2rem' }}
+                          >
+                            <Pencil size={11} />
+                          </button>
+                        </div>
+                      )}
+                      <div className="text-xs text-muted mt-1">{cluster.photo_count ?? cluster.member_count} photos</div>
                     </div>
                   </div>
                 ))}
@@ -418,7 +583,7 @@ export default function EventManager() {
                 </div>
                 <div>
                   <h3 style={{ margin: 0, fontSize: '1.1rem' }}>{selectedCluster.label || `Person ${selectedCluster.id.slice(0, 6)}`}</h3>
-                  <div className="text-xs text-muted">{selectedCluster.member_count} photos in this group</div>
+                  <div className="text-xs text-muted">{selectedCluster.photo_count ?? selectedCluster.member_count} photos for this person</div>
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -498,16 +663,19 @@ export default function EventManager() {
 
       <ConfirmActionModal
         isOpen={deleteModal.isOpen}
-        title={deleteModal.type === 'all' ? "Clear All Photos" : "Clear Stuck Photos"}
+        title={deleteModal.type === 'rebuild' ? 'Rebuild People' : deleteModal.type === 'all' ? "Clear All Photos" : "Clear Stuck Photos"}
         message={
-          deleteModal.type === 'all' 
+          deleteModal.type === 'rebuild'
+            ? 'Every original photo will be reprocessed with the current face model. Existing person names and manual merges will be reset while new groups are built.'
+            : deleteModal.type === 'all'
             ? "Are you sure you want to delete ALL photos for this event? This action will permanently remove all photos and face data."
             : "Are you sure you want to delete all queued and failed photos?"
         }
         onConfirm={handleDeleteConfirm}
         onCancel={() => setDeleteModal({ isOpen: false, type: null, isDeleting: false })}
         isLoading={deleteModal.isDeleting}
-        confirmText="Delete Photos"
+        confirmText={deleteModal.type === 'rebuild' ? 'Start Rebuild' : 'Delete Photos'}
+        destructive={deleteModal.type !== 'rebuild'}
       />
     </div>
   );
