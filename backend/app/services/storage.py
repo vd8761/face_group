@@ -55,19 +55,25 @@ async def upload_original(
     mime_type: str,
 ) -> str:
     """Upload original photo to R2 and return its object key."""
+    from fastapi.concurrency import run_in_threadpool
+    
     ext = Path(filename).suffix.lstrip(".").lower() or "jpg"
     key = _make_key(tenant_id, event_id, photo_id, "original", ext)
-    get_s3_client().put_object(
-        Bucket=settings.R2_BUCKET_NAME,
-        Key=key,
-        Body=data,
-        ContentType=mime_type,
-        Metadata={
-            "tenant-id": str(tenant_id),
-            "event-id": str(event_id),
-            "photo-id": str(photo_id),
-        },
-    )
+    
+    def _do_upload():
+        get_s3_client().put_object(
+            Bucket=settings.R2_BUCKET_NAME,
+            Key=key,
+            Body=data,
+            ContentType=mime_type,
+            Metadata={
+                "tenant-id": str(tenant_id),
+                "event-id": str(event_id),
+                "photo-id": str(photo_id),
+            },
+        )
+        
+    await run_in_threadpool(_do_upload)
     return key
 
 
@@ -80,42 +86,47 @@ async def upload_thumbnail(
     filename: str = '',
 ) -> str:
     """Generate and upload a correctly-oriented JPEG thumbnail; return its object key."""
-    import os as _os
-    from PIL import ImageOps
-
-    ext = _os.path.splitext(filename.lower())[1] if filename else ''
-    RAW_EXTS = {'.arw', '.cr2', '.cr3', '.nef', '.dng', '.raf', '.orf', '.rw2', '.pef', '.srw'}
-
-    if ext in RAW_EXTS:
-        # For RAW files, use rawpy to get a rendered RGB image
-        try:
-            import rawpy
-            import numpy as np
-            with rawpy.imread(io.BytesIO(data)) as raw:
-                rgb = raw.postprocess(use_camera_wb=True, half_size=True, output_bps=8)
-            img = Image.fromarray(rgb)
-        except ImportError:
-            # rawpy not available — try PIL (will likely fail for RAW but won't crash)
+    from fastapi.concurrency import run_in_threadpool
+    
+    def _do_thumbnail():
+        import os as _os
+        from PIL import ImageOps
+    
+        ext = _os.path.splitext(filename.lower())[1] if filename else ''
+        RAW_EXTS = {'.arw', '.cr2', '.cr3', '.nef', '.dng', '.raf', '.orf', '.rw2', '.pef', '.srw'}
+    
+        if ext in RAW_EXTS:
+            # For RAW files, use rawpy to get a rendered RGB image
+            try:
+                import rawpy
+                import numpy as np
+                with rawpy.imread(io.BytesIO(data)) as raw:
+                    rgb = raw.postprocess(use_camera_wb=True, half_size=True, output_bps=8)
+                img = Image.fromarray(rgb)
+            except ImportError:
+                # rawpy not available — try PIL (will likely fail for RAW but won't crash)
+                img = Image.open(io.BytesIO(data))
+        else:
             img = Image.open(io.BytesIO(data))
-    else:
-        img = Image.open(io.BytesIO(data))
+    
+        # Apply EXIF rotation — fixes portrait/rotated photos
+        img = ImageOps.exif_transpose(img)
+        img.thumbnail(target_size, Image.LANCZOS)
+    
+        buf = io.BytesIO()
+        img.convert("RGB").save(buf, format="JPEG", quality=80, optimize=True)
+        buf.seek(0)
+    
+        key = _make_key(tenant_id, event_id, photo_id, "thumbnail", "jpg")
+        get_s3_client().put_object(
+            Bucket=settings.R2_BUCKET_NAME,
+            Key=key,
+            Body=buf.getvalue(),
+            ContentType="image/jpeg",
+        )
+        return key
 
-    # Apply EXIF rotation — fixes portrait/rotated photos
-    img = ImageOps.exif_transpose(img)
-    img.thumbnail(target_size, Image.LANCZOS)
-
-    buf = io.BytesIO()
-    img.convert("RGB").save(buf, format="JPEG", quality=80, optimize=True)
-    buf.seek(0)
-
-    key = _make_key(tenant_id, event_id, photo_id, "thumbnail", "jpg")
-    get_s3_client().put_object(
-        Bucket=settings.R2_BUCKET_NAME,
-        Key=key,
-        Body=buf.getvalue(),
-        ContentType="image/jpeg",
-    )
-    return key
+    return await run_in_threadpool(_do_thumbnail)
 
 
 
@@ -126,13 +137,19 @@ async def upload_face_crop(
     detection_id: uuid.UUID,
 ) -> str:
     """Upload a pre-cropped and JPEG-encoded face crop to R2."""
+    from fastapi.concurrency import run_in_threadpool
+    
     key = f"{tenant_id}/{event_id}/faces/{detection_id}.jpg"
-    get_s3_client().put_object(
-        Bucket=settings.R2_BUCKET_NAME,
-        Key=key,
-        Body=data,
-        ContentType="image/jpeg",
-    )
+    
+    def _do_upload():
+        get_s3_client().put_object(
+            Bucket=settings.R2_BUCKET_NAME,
+            Key=key,
+            Body=data,
+            ContentType="image/jpeg",
+        )
+        
+    await run_in_threadpool(_do_upload)
     return key
 
 
