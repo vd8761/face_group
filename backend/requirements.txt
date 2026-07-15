@@ -40,3 +40,5 @@ httpx==0.28.1
 
 # Observability
 sentry-sdk[fastapi]==2.19.0
+celery==5.4.0  
+redis==5.0.4  
