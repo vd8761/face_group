@@ -521,42 +521,13 @@ async def _process_drive_import(
                     await db.commit()
 
                     # 5. Face detection + clustering
-                    detected_faces = await run_in_threadpool(detect_and_embed, data, filename)
-                    for face in detected_faces:
-                        detection = FaceDetection(
-                            photo_id=photo_uuid,
-                            bbox={"x1": face.bbox[0], "y1": face.bbox[1],
-                                  "x2": face.bbox[2], "y2": face.bbox[3]},
-                            detection_confidence=face.confidence,
-                            quality_score=face.quality_score,
-                            embedding=embedding_to_bytes(face.embedding),
-                            is_low_quality=face.is_low_quality,
-                        )
-                        db.add(detection)
-                        await db.flush()
-                        
-                        if not face.is_low_quality:
-                            # Upload face crop to R2
-                            face_key = await upload_face_crop(
-                                face.face_crop_bytes,
-                                tenant_id,
-                                event_id,
-                                detection.id
-                            )
-                            detection.face_key = face_key
-                            await db.flush()
-
-                            cluster_id = await assign_to_cluster(
-                                detection.id, face.embedding, event_id, db
-                            )
-                            if cluster_id is None:
-                                await create_new_cluster(
-                                    detection.id, face.embedding, event_id, db
-                                )
-
-                    photo_obj.status = PhotoStatus.done
-                    await db.commit()
-
+                    # Dispatch to Celery instead of processing locally
+                    from ..workers.tasks import _process_photo_task
+                    _process_photo_task.delay(
+                        str(photo_uuid),
+                        str(tenant_id),
+                        str(event_id)
+                    )
                 except Exception as e:
                     await db.rollback()
                     try:
@@ -805,11 +776,7 @@ async def retry_failed_photos(
 
     # Dispatch each failed photo to Celery
     for p_id in photo_ids:
-        try:
-            _process_photo_task.delay(str(p_id), str(event.tenant_id), str(event.id))
-        except Exception as e:
-            # Fallback to local background processing only if Celery is down
-            asyncio.create_task(_reprocess_failed_background(photo_ids=[str(p_id)], event=event))
+        _process_photo_task.delay(str(p_id), str(event.tenant_id), str(event.id))
 
     return {
         "retrying": len(photo_ids),
