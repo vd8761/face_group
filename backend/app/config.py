@@ -83,9 +83,9 @@ class Settings(BaseSettings):
     FACE_MIN_SIZE: int = 40
     EMBEDDING_DIM: int = 512                     # ArcFace 512-dim
 
-    # ── HDBSCAN Clustering ────────────────────────────────────────────────────
-    HDBSCAN_MIN_CLUSTER_SIZE: int = 2
-    COSINE_MATCH_THRESHOLD: float = 0.35          # < this = same person (lower = stricter)
+    # ── Agglomerative Clustering ──────────────────────────────────────────────
+    AGGLOMERATIVE_DISTANCE_THRESHOLD: float = 0.45
+    COSINE_MATCH_THRESHOLD: float = 0.45          # < this = same person (lower = stricter)
 
     # ── File size limits ──────────────────────────────────────────────────────
     MAX_UPLOAD_SIZE_MB: int = 100  # Per-photo max (RAW files can be 50-80MB)

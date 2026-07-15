@@ -129,15 +129,15 @@ async def create_new_cluster(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Full HDBSCAN re-cluster for an event (run periodically or on-demand)
+# Full Agglomerative re-cluster for an event (run periodically or on-demand)
 # ─────────────────────────────────────────────────────────────────────────────
 async def recluster_event(event_id: uuid.UUID, db: AsyncSession) -> int:
     """
-    Run HDBSCAN over all non-low-quality embeddings for an event.
-    Rebuilds cluster assignments from scratch.
+    Run Agglomerative Clustering over all non-low-quality embeddings for an event.
+    Rebuilds cluster assignments from scratch using the Google Photos approach.
     Returns the number of clusters found.
     """
-    import hdbscan
+    from sklearn.cluster import AgglomerativeClustering
 
     # Fetch all usable detections
     result = await db.execute(
@@ -156,12 +156,12 @@ async def recluster_event(event_id: uuid.UUID, db: AsyncSession) -> int:
     embeddings = np.array([bytes_to_embedding(d.embedding) for d in detections])
     detection_ids = [d.id for d in detections]
 
-    # Run HDBSCAN
-    clusterer = hdbscan.HDBSCAN(
-        min_cluster_size=settings.HDBSCAN_MIN_CLUSTER_SIZE,
-        min_samples=1,
-        metric="euclidean",
-        cluster_selection_method="eom",
+    # Run Agglomerative Clustering (Google Photos approach)
+    clusterer = AgglomerativeClustering(
+        n_clusters=None,
+        distance_threshold=settings.AGGLOMERATIVE_DISTANCE_THRESHOLD,
+        metric="cosine",
+        linkage="average",
     )
     labels = clusterer.fit_predict(embeddings)
     n_clusters = len(set(labels)) - (1 if -1 in labels else 0)

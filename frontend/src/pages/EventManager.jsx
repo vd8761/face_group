@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import api from '../api/client';
 import PhotoUpload from '../components/PhotoUpload';
+import ConfirmActionModal from '../components/ConfirmActionModal';
 
 const StatusBadge = ({ status }) => {
   const map = {
@@ -36,6 +37,9 @@ export default function EventManager() {
   const [selectedCluster, setSelectedCluster] = useState(null);
   const [clusterPhotos, setClusterPhotos] = useState([]);
   const [loadingClusterPhotos, setLoadingClusterPhotos] = useState(false);
+
+  // Deletion Modal State
+  const [deleteModal, setDeleteModal] = useState({ isOpen: false, type: null, isDeleting: false });
 
   const loadEvent = useCallback(async () => {
     try {
@@ -81,6 +85,23 @@ export default function EventManager() {
       await api.post(`/api/faces/events/${eventId}/recluster`);
       setTimeout(() => { loadClusters(); setReClustering(false); }, 3000);
     } catch (e) { setReClustering(false); }
+  };
+
+  const handleDeleteConfirm = async () => {
+    setDeleteModal(prev => ({ ...prev, isDeleting: true }));
+    try {
+      if (deleteModal.type === 'all') {
+        await api.delete(`/api/photos/events/${eventId}/clear?status_filter=all`);
+      } else if (deleteModal.type === 'stuck') {
+        await api.delete(`/api/photos/events/${eventId}/clear?status_filter=queued`);
+        await api.delete(`/api/photos/events/${eventId}/clear?status_filter=failed`);
+      }
+      loadPhotos(); loadClusters(); loadEvent();
+    } catch (e) {
+      alert('Error clearing photos: ' + (e?.response?.data?.detail || e.message));
+    } finally {
+      setDeleteModal({ isOpen: false, type: null, isDeleting: false });
+    }
   };
 
   const mergeClusters = async () => {
@@ -253,25 +274,14 @@ export default function EventManager() {
                 )}
                 <button 
                   className="btn btn-outline btn-sm" 
-                  onClick={async () => {
-                    if (window.confirm("Are you sure you want to delete ALL photos for this event? This action cannot be undone.")) {
-                      await api.delete(`/api/photos/events/${eventId}/clear?status_filter=all`);
-                      loadPhotos(); loadClusters(); loadEvent();
-                    }
-                  }}
+                  onClick={() => setDeleteModal({ isOpen: true, type: 'all', isDeleting: false })}
                 >
                   <AlertTriangle size={13} style={{ color: 'var(--error)' }} />
                   Clear All Photos
                 </button>
                 <button 
                   className="btn btn-outline btn-sm" 
-                  onClick={async () => {
-                    if (window.confirm("Delete all queued and failed photos?")) {
-                      await api.delete(`/api/photos/events/${eventId}/clear?status_filter=queued`);
-                      await api.delete(`/api/photos/events/${eventId}/clear?status_filter=failed`);
-                      loadPhotos(); loadClusters(); loadEvent();
-                    }
-                  }}
+                  onClick={() => setDeleteModal({ isOpen: true, type: 'stuck', isDeleting: false })}
                 >
                   <AlertTriangle size={13} style={{ color: 'var(--error)' }} />
                   Clear Stuck
@@ -483,6 +493,20 @@ export default function EventManager() {
       )}
 
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+
+      <ConfirmActionModal
+        isOpen={deleteModal.isOpen}
+        title={deleteModal.type === 'all' ? "Clear All Photos" : "Clear Stuck Photos"}
+        message={
+          deleteModal.type === 'all' 
+            ? "Are you sure you want to delete ALL photos for this event? This action will permanently remove all photos and face data."
+            : "Are you sure you want to delete all queued and failed photos?"
+        }
+        onConfirm={handleDeleteConfirm}
+        onCancel={() => setDeleteModal({ isOpen: false, type: null, isDeleting: false })}
+        isLoading={deleteModal.isDeleting}
+        confirmText="Delete Photos"
+      />
     </div>
   );
 }
