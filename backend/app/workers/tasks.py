@@ -109,10 +109,10 @@ def process_photo(self, photo_id: str, tenant_id: str, event_id: str):
                 )
                 pending = pending_count_result.scalar() or 0
                 if pending == 0:
-                    logger.info(f"Event {event_id}: all photos done — triggering auto-recluster")
+                    logger.info(f"Event {event_id}: all photos done — triggering auto-recluster in 30s")
                     recluster_event_task.apply_async(
                         args=[event_id],
-                        countdown=5,   # 5s delay so any in-flight commits settle
+                        countdown=30,   # 30s debounce delay
                     )
 
 
@@ -166,9 +166,23 @@ def recluster_event_task(self, event_id: str):
     """
     from ..database import AsyncSessionLocal
     from ..services.clustering import recluster_event
+    from ..models import Photo, PhotoStatus
+    from sqlalchemy import select, func as sa_func
 
     async def _run():
         async with AsyncSessionLocal() as db:
+            # Check if any new photos were queued during the 30s debounce delay
+            pending_count_result = await db.execute(
+                select(sa_func.count(Photo.id)).where(
+                    Photo.event_id == uuid.UUID(event_id),
+                    Photo.status.in_([PhotoStatus.queued, PhotoStatus.processing]),
+                )
+            )
+            pending = pending_count_result.scalar() or 0
+            if pending > 0:
+                logger.info(f"Event {event_id}: Aborting auto-recluster, found {pending} pending photos")
+                return 0
+
             n_clusters = await recluster_event(uuid.UUID(event_id), db)
             await db.commit()
             logger.info(f"Event {event_id} reclustered: {n_clusters} clusters")

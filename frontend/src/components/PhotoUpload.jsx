@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import api from '../api/client';
 
-const BATCH_SIZE = 5;
+const BATCH_SIZE = 4;
 
 export default function PhotoUpload({ eventId, onUploadComplete }) {
   const [uploadMode, setUploadMode]   = useState('local');   // 'local' | 'drive'
@@ -87,14 +87,12 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
     });
   };
 
-  /* ── core upload logic ── */
   const runUpload = async (filesToUpload) => {
     setUploading(true);
     setDone(false);
 
     const batches = [];
-    // Reduce batch size to 2 to prevent backend timeout/OOM
-    const safeBatchSize = 2; 
+    const safeBatchSize = 4; // Upload 4 photos per batch
     for (let i = 0; i < filesToUpload.length; i += safeBatchSize) {
       batches.push(filesToUpload.slice(i, i + safeBatchSize));
     }
@@ -106,34 +104,49 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
 
     setProgress({ batchDone: 0, batchTotal: batches.length });
 
+    const CONCURRENCY_LIMIT = 5; // Max 5 batches simultaneously (20 photos)
+    const executing = new Set();
+
     for (const batch of batches) {
-      try {
-        const formData = new FormData();
-        for (const f of batch) {
-            const compressed = await compressImage(f);
-            formData.append('files', compressed);
-        }
+      const promise = (async () => {
+        try {
+          const formData = new FormData();
+          for (const f of batch) {
+              const compressed = await compressImage(f);
+              formData.append('files', compressed);
+          }
 
-        const { data } = await api.post(
-          `/api/photos/events/${eventId}/upload`,
-          formData,
-          { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 120000 }
-        );
+          const { data } = await api.post(
+            `/api/photos/events/${eventId}/upload`,
+            formData,
+            { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 120000 }
+          );
 
-        accepted       += data.accepted   || 0;
-        allDuplicates   = [...allDuplicates, ...(data.duplicate_names || [])];
+          accepted       += data.accepted   || 0;
+          allDuplicates   = [...allDuplicates, ...(data.duplicate_names || [])];
 
-        // If entire batch was rejected (all duplicates or all format errors), don't fail it
-        if ((data.accepted || 0) === 0 && (data.duplicates || 0) === 0 && (data.skipped_format || 0) === 0) {
+          // If entire batch was rejected (all duplicates or all format errors), don't fail it
+          if ((data.accepted || 0) === 0 && (data.duplicates || 0) === 0 && (data.skipped_format || 0) === 0) {
+            newFailed = [...newFailed, ...batch];
+          }
+        } catch {
           newFailed = [...newFailed, ...batch];
         }
-      } catch {
-        newFailed = [...newFailed, ...batch];
-      }
 
-      batchesDone++;
-      setProgress({ batchDone: batchesDone, batchTotal: batches.length });
+        batchesDone++;
+        setProgress(prev => ({ ...prev, batchDone: batchesDone }));
+      })();
+
+      executing.add(promise);
+      promise.finally(() => executing.delete(promise));
+
+      if (executing.size >= CONCURRENCY_LIMIT) {
+        await Promise.race(executing);
+      }
     }
+
+    // Wait for all remaining batches to finish
+    await Promise.all(executing);
 
     setUploadedCount(prev => prev + accepted);
     setFailedFiles(newFailed);
