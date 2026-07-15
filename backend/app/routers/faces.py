@@ -4,7 +4,7 @@ Faces router — selfie scan, cluster management, consent, and selfie deletion.
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -361,16 +361,32 @@ async def merge_two_clusters(
 @router.post("/events/{event_id}/recluster", response_model=MessageResponse)
 async def trigger_recluster(
     event_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_organizer),
     db: AsyncSession = Depends(get_db),
 ):
     """Admin: manually trigger re-clustering for an event."""
     from ..workers.tasks import recluster_event_task
+    
     # Verify event exists
     event_res = await db.execute(select(Event).where(Event.id == event_id))
     if not event_res.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Event not found")
         
-    recluster_event_task.apply_async(args=[str(event_id)])
+    try:
+        recluster_event_task.delay(str(event_id))
+    except Exception as e:
+        print(f"Celery dispatch failed: {e}. Falling back to BackgroundTasks.")
+        from ..services.clustering import recluster_event
+        from ..database import async_session_maker
+        import asyncio
+
+        async def _recluster_bg():
+            async with async_session_maker() as db2:
+                await recluster_event(event_id, db2)
+                await db2.commit()
+
+        background_tasks.add_task(lambda: asyncio.create_task(_recluster_bg()))
+        
     return MessageResponse(message="Reclustering started in background")
 
