@@ -20,6 +20,9 @@ ssl_conf = {"ssl_cert_reqs": ssl.CERT_NONE} if settings.REDIS_URL and settings.R
 celery_app.conf.update(
     broker_use_ssl=ssl_conf,
     redis_backend_use_ssl=ssl_conf,
+    broker_connection_timeout=3.0,
+    broker_connection_retry=False,
+    broker_connection_max_retries=0,
     task_serializer="json",
     accept_content=["json"],
     result_serializer="json",

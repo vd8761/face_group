@@ -141,9 +141,10 @@ async def upload_photos(
       3. FREE bytes from RAM immediately
 
     Response is sent after all files are enqueued.
-    Face detection runs via BackgroundTasks, downloading from R2 one by one.
+    Face detection runs via Celery if available, falling back to BackgroundTasks.
     """
     import os as _os
+    from ..workers.tasks import process_photo as _process_photo_task
 
     if len(files) > MAX_FILES_PER_REQUEST:
         raise HTTPException(
@@ -171,6 +172,7 @@ async def upload_photos(
         )
 
     created_ids  = []
+    fallback_ids = []
     total_bytes  = 0
     duplicates   = []
     skipped_fmt  = []
@@ -242,7 +244,17 @@ async def upload_photos(
         db.add(photo)
         await db.flush()   # get photo.id assigned before Celery dispatch
 
-        # ── Dispatch to BackgroundTasks — zero RAM held in this process ─────────
+        # ── Dispatch to Celery with BackgroundTasks fallback ─────────
+        try:
+            _process_photo_task.delay(
+                str(photo_id),
+                str(current_user.tenant_id),
+                str(event_id),
+            )
+        except Exception as celery_err:
+            print(f"Celery dispatch failed: {celery_err}. Falling back to BackgroundTasks for photo {photo_id}")
+            fallback_ids.append(str(photo_id))
+            
         created_ids.append(str(photo_id))
 
     except Exception as e:
@@ -265,10 +277,10 @@ async def upload_photos(
 
     await db.commit()
     
-    if created_ids:
+    if fallback_ids:
         background_tasks.add_task(
             _reprocess_failed_background,
-            photo_ids=created_ids,
+            photo_ids=fallback_ids,
             event=event,
         )
 

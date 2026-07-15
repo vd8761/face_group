@@ -72,6 +72,9 @@ class Settings(BaseSettings):
     def check_redis_url(cls, v: str) -> str:
         if not v or v.strip() == "":
             raise ValueError("REDIS_URL cannot be empty. Please set it in your environment variables.")
+        # Auto-fix Upstash URLs to use SSL (rediss://)
+        if v.startswith("redis://") and "upstash" in v.lower():
+            v = v.replace("redis://", "rediss://", 1)
         return v
 
     # ── ML Pipeline ───────────────────────────────────────────────────────────
