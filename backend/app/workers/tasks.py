@@ -7,6 +7,9 @@ import asyncio
 from celery import shared_task
 from celery.utils.log import get_task_logger
 
+# Import the configured celery_app to ensure the current process sets it as the default app
+from .celery_app import celery_app
+
 logger = get_task_logger(__name__)
 
 
