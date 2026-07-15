@@ -144,7 +144,8 @@ async def recluster_event(event_id: uuid.UUID, db: AsyncSession) -> int:
         select(FaceDetection)
         .join(FaceDetection.photo)
         .where(
-            FaceDetection.photo.has(event_id=event_id)
+            FaceDetection.photo.has(event_id=event_id),
+            FaceDetection.is_low_quality == False
         )
     )
     detections = result.scalars().all()
