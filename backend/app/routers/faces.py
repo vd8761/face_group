@@ -356,3 +356,21 @@ async def merge_two_clusters(
     """Admin: merge source cluster into target (corrects misclassification)."""
     await merge_clusters(body.source_cluster_id, body.target_cluster_id, db)
     return MessageResponse(message="Clusters merged successfully")
+
+
+@router.post("/events/{event_id}/recluster", response_model=MessageResponse)
+async def trigger_recluster(
+    event_id: uuid.UUID,
+    current_user: User = Depends(require_organizer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin: manually trigger re-clustering for an event."""
+    from ..workers.tasks import recluster_event_task
+    # Verify event exists
+    event_res = await db.execute(select(Event).where(Event.id == event_id))
+    if not event_res.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Event not found")
+        
+    recluster_event_task.apply_async(args=[str(event_id)])
+    return MessageResponse(message="Reclustering started in background")
+
