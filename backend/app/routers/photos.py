@@ -522,8 +522,8 @@ async def _process_drive_import(
 
                     # 5. Face detection + clustering
                     # Dispatch to Celery instead of processing locally
-                    from ..workers.tasks import _process_photo_task
-                    _process_photo_task.delay(
+                    from ..workers.tasks import process_photo
+                    process_photo.delay(
                         str(photo_uuid),
                         str(tenant_id),
                         str(event_id)
@@ -777,9 +777,10 @@ async def retry_failed_photos(
 
     # Move Celery dispatch to a background task to prevent blocking the event loop
     def _dispatch_all():
+        from ..workers.tasks import process_photo
         for p_id in photo_ids:
             try:
-                _process_photo_task.delay(str(p_id), str(event.tenant_id), str(event.id))
+                process_photo.delay(str(p_id), str(event.tenant_id), str(event.id))
             except Exception as e:
                 print(f"Failed to dispatch {p_id}: {e}")
 
