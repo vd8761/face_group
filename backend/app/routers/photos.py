@@ -10,7 +10,7 @@ import gc
 from typing import List
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status, BackgroundTasks
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -127,26 +127,23 @@ MAX_FILES_PER_REQUEST = 200  # Server-side batch cap — frontend may chunk larg
 @router.post("/events/{event_id}/upload", status_code=202)
 async def upload_photos(
     event_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
     files: List[UploadFile] = File(...),
     current_user: User = Depends(require_organizer),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Bulk photo upload — memory-safe version.
+    Bulk photo upload — memory-safe version without Celery.
 
     For each file:
-      1. Read bytes → validate → dedup check
-      2. Upload original + thumbnail to R2
-      3. Save Photo DB row (status=queued)
-      4. FREE bytes from RAM immediately (del data / gc.collect)
-      5. Dispatch Celery task process_photo.delay() → worker picks it up
+      1. Upload original + thumbnail to R2
+      2. Save Photo DB row (status=queued)
+      3. FREE bytes from RAM immediately
 
     Response is sent after all files are enqueued.
-    Face detection runs in Celery worker — NOT in this process.
-    This keeps the API process memory flat regardless of batch size.
+    Face detection runs via BackgroundTasks, downloading from R2 one by one.
     """
     import os as _os
-    from ..workers.tasks import process_photo as _process_photo_task
 
     if len(files) > MAX_FILES_PER_REQUEST:
         raise HTTPException(
@@ -177,9 +174,12 @@ async def upload_photos(
     total_bytes  = 0
     duplicates   = []
     skipped_fmt  = []
+    
+    import traceback
 
-    for file in files:
-        fname = (file.filename or '').strip()
+    try:
+        for file in files:
+            fname = (file.filename or '').strip()
         ext   = _os.path.splitext(fname.lower())[1]
 
         # Extension whitelist (MIME types unreliable for RAW/TIFF)
@@ -242,13 +242,14 @@ async def upload_photos(
         db.add(photo)
         await db.flush()   # get photo.id assigned before Celery dispatch
 
-        # ── Dispatch to Celery worker — zero RAM held in this process ─────────
-        _process_photo_task.delay(
-            str(photo_id),
-            str(current_user.tenant_id),
-            str(event_id),
-        )
+        # ── Dispatch to BackgroundTasks — zero RAM held in this process ─────────
         created_ids.append(str(photo_id))
+
+    except Exception as e:
+        import traceback
+        err_msg = str(e)
+        tb = traceback.format_exc()
+        raise HTTPException(status_code=500, detail={"error": err_msg, "traceback": tb})
 
     if sub and total_bytes:
         sub.current_storage_bytes = (sub.current_storage_bytes or 0) + total_bytes
@@ -263,6 +264,13 @@ async def upload_photos(
     ))
 
     await db.commit()
+    
+    if created_ids:
+        background_tasks.add_task(
+            _reprocess_failed_background,
+            photo_ids=created_ids,
+            event=event,
+        )
 
     return {
         "accepted":        len(created_ids),
