@@ -638,11 +638,23 @@ async def clear_event_photos(
 
     from ..services.storage import delete_objects
     from fastapi.concurrency import run_in_threadpool
+    from ..models import FaceDetection
 
     result = await db.execute(query)
     photos = result.scalars().all()
+    photo_ids = [p.id for p in photos]
 
     keys_to_delete = []
+    
+    if photo_ids:
+        # Collect face keys for R2 deletion (chunked to avoid query limits)
+        for i in range(0, len(photo_ids), 500):
+            chunk = photo_ids[i:i+500]
+            det_res = await db.execute(select(FaceDetection).where(FaceDetection.photo_id.in_(chunk)))
+            for d in det_res.scalars().all():
+                if d.face_key:
+                    keys_to_delete.append(d.face_key)
+
     for p in photos:
         if p.original_key:
             keys_to_delete.append(p.original_key)
