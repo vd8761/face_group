@@ -84,8 +84,8 @@ class Settings(BaseSettings):
     EMBEDDING_DIM: int = 512                     # ArcFace 512-dim
 
     # ── Agglomerative Clustering ──────────────────────────────────────────────
-    AGGLOMERATIVE_DISTANCE_THRESHOLD: float = 0.65
-    COSINE_MATCH_THRESHOLD: float = 0.65          # < this = same person (lower = stricter)
+    AGGLOMERATIVE_DISTANCE_THRESHOLD: float = 0.75
+    COSINE_MATCH_THRESHOLD: float = 0.75          # < this = same person (lower = stricter)
 
     # ── File size limits ──────────────────────────────────────────────────────
     MAX_UPLOAD_SIZE_MB: int = 100  # Per-photo max (RAW files can be 50-80MB)

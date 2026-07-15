@@ -82,6 +82,17 @@ def process_photo(self, photo_id: str, tenant_id: str, event_id: str):
 
                     # Skip low-quality faces for clustering
                     if not face.is_low_quality:
+                        # Upload face crop to R2 for the UI thumbnail
+                        from ..services.storage import upload_face_crop
+                        face_key = await upload_face_crop(
+                            face.face_crop_bytes,
+                            uuid.UUID(tenant_id),
+                            uuid.UUID(event_id),
+                            detection.id
+                        )
+                        detection.face_key = face_key
+                        await db.flush()
+
                         cluster_id = await assign_to_cluster(
                             detection.id, face.embedding,
                             uuid.UUID(event_id), db
