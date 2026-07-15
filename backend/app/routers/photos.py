@@ -244,17 +244,12 @@ async def upload_photos(
             db.add(photo)
             await db.flush()   # get photo.id assigned before Celery dispatch
     
-            # ── Dispatch to Celery with BackgroundTasks fallback ─────────
-            try:
-                _process_photo_task.delay(
-                    str(photo_id),
-                    str(current_user.tenant_id),
-                    str(event_id),
-                )
-            except Exception as celery_err:
-                print(f"Celery dispatch failed: {celery_err}. Falling back to BackgroundTasks for photo {photo_id}")
-                fallback_ids.append(str(photo_id))
-                
+            # ── Dispatch to Celery ─────────
+            _process_photo_task.delay(
+                str(photo_id),
+                str(current_user.tenant_id),
+                str(event_id),
+            )
             created_ids.append(str(photo_id))
 
     except Exception as e:
