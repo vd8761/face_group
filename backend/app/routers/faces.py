@@ -386,7 +386,7 @@ async def trigger_recluster(
                 await recluster_event(event_id, db2)
                 await db2.commit()
 
-        background_tasks.add_task(lambda: asyncio.create_task(_recluster_bg()))
+        background_tasks.add_task(_recluster_bg)
         
     return MessageResponse(message="Reclustering started in background")
 
