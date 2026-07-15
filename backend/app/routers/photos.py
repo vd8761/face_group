@@ -182,80 +182,80 @@ async def upload_photos(
     try:
         for file in files:
             fname = (file.filename or '').strip()
-        ext   = _os.path.splitext(fname.lower())[1]
-
-        # Extension whitelist (MIME types unreliable for RAW/TIFF)
-        if ext not in settings.ALLOWED_IMAGE_EXTENSIONS:
-            skipped_fmt.append(fname)
-            continue
-
-        data = await file.read()
-
-        if len(data) > settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024:
-            skipped_fmt.append(fname)
-            del data
-            continue
-
-        # SHA-256 duplicate check
-        content_hash = hashlib.sha256(data).hexdigest()
-        existing = await db.execute(
-            select(Photo).where(
-                Photo.event_id == event_id,
-                Photo.content_hash == content_hash,
+            ext   = _os.path.splitext(fname.lower())[1]
+    
+            # Extension whitelist (MIME types unreliable for RAW/TIFF)
+            if ext not in settings.ALLOWED_IMAGE_EXTENSIONS:
+                skipped_fmt.append(fname)
+                continue
+    
+            data = await file.read()
+    
+            if len(data) > settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024:
+                skipped_fmt.append(fname)
+                del data
+                continue
+    
+            # SHA-256 duplicate check
+            content_hash = hashlib.sha256(data).hexdigest()
+            existing = await db.execute(
+                select(Photo).where(
+                    Photo.event_id == event_id,
+                    Photo.content_hash == content_hash,
+                )
             )
-        )
-        if existing.scalar_one_or_none():
-            duplicates.append(fname)
-            del data
-            continue
-
-        photo_id = uuid.uuid4()
-        mime     = file.content_type or "application/octet-stream"
-
-        # ── Upload to R2 ─────────────────────────────────────────────────────
-        original_key  = await upload_original(
-            data, current_user.tenant_id, event_id, photo_id,
-            fname or f"{photo_id}{ext}", mime,
-        )
-        thumbnail_key = await upload_thumbnail(
-            data, current_user.tenant_id, event_id, photo_id, filename=fname,
-        )
-
-        # ── Free image bytes IMMEDIATELY after R2 upload ──────────────────────
-        # This is the critical fix: we do NOT buffer data in a list.
-        # Each file's bytes are freed before moving to the next file.
-        total_bytes += len(data)
-        del data
-        gc.collect()
-
-        # ── Save DB row ───────────────────────────────────────────────────────
-        photo = Photo(
-            id=photo_id,
-            event_id=event_id,
-            tenant_id=current_user.tenant_id,
-            original_key=original_key,
-            thumbnail_key=thumbnail_key,
-            original_size_bytes=0,   # bytes already freed
-            filename=fname or f"{photo_id}{ext}",
-            mime_type=mime,
-            content_hash=content_hash,
-            status=PhotoStatus.queued,
-        )
-        db.add(photo)
-        await db.flush()   # get photo.id assigned before Celery dispatch
-
-        # ── Dispatch to Celery with BackgroundTasks fallback ─────────
-        try:
-            _process_photo_task.delay(
-                str(photo_id),
-                str(current_user.tenant_id),
-                str(event_id),
+            if existing.scalar_one_or_none():
+                duplicates.append(fname)
+                del data
+                continue
+    
+            photo_id = uuid.uuid4()
+            mime     = file.content_type or "application/octet-stream"
+    
+            # ── Upload to R2 ─────────────────────────────────────────────────────
+            original_key  = await upload_original(
+                data, current_user.tenant_id, event_id, photo_id,
+                fname or f"{photo_id}{ext}", mime,
             )
-        except Exception as celery_err:
-            print(f"Celery dispatch failed: {celery_err}. Falling back to BackgroundTasks for photo {photo_id}")
-            fallback_ids.append(str(photo_id))
-            
-        created_ids.append(str(photo_id))
+            thumbnail_key = await upload_thumbnail(
+                data, current_user.tenant_id, event_id, photo_id, filename=fname,
+            )
+    
+            # ── Free image bytes IMMEDIATELY after R2 upload ──────────────────────
+            # This is the critical fix: we do NOT buffer data in a list.
+            # Each file's bytes are freed before moving to the next file.
+            total_bytes += len(data)
+            del data
+            gc.collect()
+    
+            # ── Save DB row ───────────────────────────────────────────────────────
+            photo = Photo(
+                id=photo_id,
+                event_id=event_id,
+                tenant_id=current_user.tenant_id,
+                original_key=original_key,
+                thumbnail_key=thumbnail_key,
+                original_size_bytes=0,   # bytes already freed
+                filename=fname or f"{photo_id}{ext}",
+                mime_type=mime,
+                content_hash=content_hash,
+                status=PhotoStatus.queued,
+            )
+            db.add(photo)
+            await db.flush()   # get photo.id assigned before Celery dispatch
+    
+            # ── Dispatch to Celery with BackgroundTasks fallback ─────────
+            try:
+                _process_photo_task.delay(
+                    str(photo_id),
+                    str(current_user.tenant_id),
+                    str(event_id),
+                )
+            except Exception as celery_err:
+                print(f"Celery dispatch failed: {celery_err}. Falling back to BackgroundTasks for photo {photo_id}")
+                fallback_ids.append(str(photo_id))
+                
+            created_ids.append(str(photo_id))
 
     except Exception as e:
         import traceback
