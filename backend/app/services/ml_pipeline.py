@@ -29,8 +29,8 @@ os.environ.setdefault("INSIGHTFACE_HOME", "/tmp/insightface_cache")
 
 # ── Memory safety ────────────────────────────────────────────────────────────
 # Max long edge (pixels) before face detection.
-# 1920 px is plenty for detecting faces; 4096 px wastes ~4× the RAM.
-MAX_PROCESS_DIM = 1920
+# 1280 px is an optimal sweet spot for speed and accuracy. 1920 px is much slower on CPU.
+MAX_PROCESS_DIM = 1280
 
 # Memory safety: Celery worker_concurrency=2 means two SEPARATE processes
 # each loading the model independently. No shared memory, no semaphore needed.
@@ -165,9 +165,15 @@ def _get_insightface_app():
     global _app
     if _app is None:
         from insightface.app import FaceAnalysis
+        import onnxruntime as ort
+        
+        providers = ["CPUExecutionProvider"]
+        if "CUDAExecutionProvider" in ort.get_available_providers():
+            providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            
         _app = FaceAnalysis(
-            name="buffalo_l",
-            providers=["CPUExecutionProvider"],
+            name="buffalo_s",
+            providers=providers,
         )
         # det_size=(640,640) is the standard input size — don't increase it
         _app.prepare(ctx_id=0, det_size=(640, 640))

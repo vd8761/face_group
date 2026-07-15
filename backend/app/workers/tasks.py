@@ -67,6 +67,7 @@ def process_photo(self, photo_id: str, tenant_id: str, event_id: str):
                 detected_faces = detect_and_embed(image_bytes)
                 logger.info(f"Photo {photo_id}: {len(detected_faces)} faces detected")
 
+                detections = []
                 for face in detected_faces:
                     # Persist detection + embedding
                     detection = FaceDetection(
@@ -79,27 +80,37 @@ def process_photo(self, photo_id: str, tenant_id: str, event_id: str):
                     )
                     db.add(detection)
                     await db.flush()
+                    detections.append(detection)
 
-                    # Skip low-quality faces for clustering
+                # Parallelize face crop uploads to R2
+                from ..services.storage import upload_face_crop
+                upload_tasks = []
+                for i, face in enumerate(detected_faces):
                     if not face.is_low_quality:
-                        # Upload face crop to R2 for the UI thumbnail
-                        from ..services.storage import upload_face_crop
-                        face_key = await upload_face_crop(
+                        upload_tasks.append(upload_face_crop(
                             face.face_crop_bytes,
                             uuid.UUID(tenant_id),
                             uuid.UUID(event_id),
-                            detection.id
-                        )
-                        detection.face_key = face_key
+                            detections[i].id
+                        ))
+                    else:
+                        upload_tasks.append(asyncio.sleep(0)) # dummy task for matching indices
+
+                face_keys = await asyncio.gather(*upload_tasks)
+
+                # Sequential cluster assignment
+                for i, face in enumerate(detected_faces):
+                    if not face.is_low_quality:
+                        detections[i].face_key = face_keys[i]
                         await db.flush()
 
                         cluster_id = await assign_to_cluster(
-                            detection.id, face.embedding,
+                            detections[i].id, face.embedding,
                             uuid.UUID(event_id), db
                         )
                         if cluster_id is None:
                             await create_new_cluster(
-                                detection.id, face.embedding,
+                                detections[i].id, face.embedding,
                                 uuid.UUID(event_id), db
                             )
 
