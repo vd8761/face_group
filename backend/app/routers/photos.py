@@ -683,8 +683,8 @@ async def clear_event_photos(
 # ───────────────────────────────────────────────────────────────────────────────
 async def _reprocess_failed_background(photo_ids: List[str], event: Event):
     """Re-download originals from R2 and re-run face detection for failed photos."""
-    async with async_session_maker() as db:
-        for pid in photo_ids:
+    for pid in photo_ids:
+        async with async_session_maker() as db:
             photo_uuid = uuid.UUID(pid)
             try:
                 res = await db.execute(select(Photo).where(Photo.id == photo_uuid))
@@ -808,7 +808,13 @@ async def retry_failed_photos(
         p.error_message = None
     await db.commit()
 
-    asyncio.create_task(_reprocess_failed_background(photo_ids=photo_ids, event=event))
+    # Dispatch each failed photo to Celery
+    for p_id in photo_ids:
+        try:
+            _process_photo_task.delay(str(p_id), str(event.tenant_id), str(event.id))
+        except Exception as e:
+            # Fallback to local background processing only if Celery is down
+            asyncio.create_task(_reprocess_failed_background(photo_ids=[str(p_id)], event=event))
 
     return {
         "retrying": len(photo_ids),
