@@ -192,13 +192,15 @@ export default function EventManager() {
 
         {/* Processing progress bar */}
         {totalServerPhotos > 0 && (
-          <div className="card mb-6" style={{ padding: '1.125rem 1.5rem' }}>
+          <div className="card mb-6" style={{ padding: '1.125rem 1.5rem', background: doneCount === totalServerPhotos ? 'rgba(16, 185, 129, 0.05)' : undefined, borderColor: doneCount === totalServerPhotos ? 'rgba(16, 185, 129, 0.2)' : undefined }}>
             <div className="usage-bar-label mb-2">
-              <span className="font-semibold text-sm">Processing Progress</span>
+              <span className="font-semibold text-sm" style={{ color: doneCount === totalServerPhotos ? 'var(--success)' : undefined }}>
+                {doneCount === totalServerPhotos ? 'Processing Completed 🎉' : 'Processing Progress'}
+              </span>
               <span className="text-sm text-muted">{doneCount} / {totalServerPhotos} photos done</span>
             </div>
             <div className="progress-bar" style={{ height: 8 }}>
-              <div className="progress-bar-fill" style={{ width: `${totalServerPhotos > 0 ? (doneCount / totalServerPhotos) * 100 : 0}%` }} />
+              <div className="progress-bar-fill" style={{ width: `${totalServerPhotos > 0 ? (doneCount / totalServerPhotos) * 100 : 0}%`, background: doneCount === totalServerPhotos ? 'var(--success)' : undefined }} />
             </div>
           </div>
         )}
