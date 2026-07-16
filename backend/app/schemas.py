@@ -8,7 +8,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from .models import (
     UserRole, PhotoStatus, SubscriptionPlan, SubscriptionStatus,
-    BatchSource, BatchStatus,
+    BatchSource, BatchStatus, PhotoIngestionStage, PhotoProcessingStage,
 )
 
 
@@ -134,6 +134,12 @@ class PhotoResponse(BaseModel):
     filename: str
     status: PhotoStatus
     error_message: Optional[str]
+    ingestion_stage: PhotoIngestionStage
+    processing_stage: PhotoProcessingStage
+    stage: str
+    drive_stage: Literal["not_applicable", "queued", "downloading", "downloaded", "failed"]
+    r2_stage: Literal["not_started", "uploading", "uploaded", "failed"]
+    stage_error: Optional[str] = None
     uploaded_at: datetime
     thumbnail_url: Optional[str] = None
     preview_url: Optional[str] = None
@@ -204,6 +210,8 @@ class ProcessingResources(BaseModel):
     gpu_memory_total_bytes: Optional[int] = None
     worker_count: int = 0
     stale: bool = True
+    database_mismatch: bool = False
+    database_fingerprint: Optional[str] = None
 
 
 class ProcessingBatchMetrics(BaseModel):

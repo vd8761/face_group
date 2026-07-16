@@ -32,6 +32,25 @@ class PhotoStatus(str, enum.Enum):
     done        = "done"
     failed      = "failed"
 
+
+class PhotoIngestionStage(str, enum.Enum):
+    drive_queued = "drive_queued"
+    drive_downloading = "drive_downloading"
+    drive_downloaded = "drive_downloaded"
+    drive_download_failed = "drive_download_failed"
+    r2_uploading = "r2_uploading"
+    r2_uploaded = "r2_uploaded"
+    r2_upload_failed = "r2_upload_failed"
+
+
+class PhotoProcessingStage(str, enum.Enum):
+    not_started = "not_started"
+    queued = "queued"
+    processing = "processing"
+    processed = "processed"
+    failed = "failed"
+    cancelled = "cancelled"
+
 class SubscriptionPlan(str, enum.Enum):
     starter    = "starter"
     pro        = "pro"
@@ -167,6 +186,21 @@ class Photo(Base):
     content_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     status: Mapped[PhotoStatus] = mapped_column(SAEnum(PhotoStatus), default=PhotoStatus.queued)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # These are deliberately separate from the legacy status. Ingestion can
+    # fail before face processing begins, and each axis must remain visible.
+    ingestion_stage: Mapped[PhotoIngestionStage] = mapped_column(
+        SAEnum(PhotoIngestionStage, native_enum=False, length=32),
+        nullable=False,
+        default=PhotoIngestionStage.r2_uploaded,
+        server_default=PhotoIngestionStage.r2_uploaded.value,
+    )
+    processing_stage: Mapped[PhotoProcessingStage] = mapped_column(
+        SAEnum(PhotoProcessingStage, native_enum=False, length=20),
+        nullable=False,
+        default=PhotoProcessingStage.queued,
+        server_default=PhotoProcessingStage.queued.value,
+    )
+    stage_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     event: Mapped["Event"] = relationship(back_populates="photos")
@@ -174,6 +208,8 @@ class Photo(Base):
 
     __table_args__ = (
         Index("ix_photos_event_status", "event_id", "status"),
+        Index("ix_photos_event_ingestion_stage", "event_id", "ingestion_stage"),
+        Index("ix_photos_event_processing_stage", "event_id", "processing_stage"),
         Index("ix_photos_event_hash",   "event_id", "content_hash"),
     )
 

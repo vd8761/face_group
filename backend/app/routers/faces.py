@@ -14,7 +14,8 @@ from pydantic import BaseModel, Field
 from ..database import get_db
 from ..models import (
     User, Event, Photo, PhotoStatus, FaceDetection, FaceCluster, SelfieScan,
-    ConsentRecord, AuditLog, UserRole
+    ConsentRecord, AuditLog, UserRole, ProcessingBatch, ProcessingBatchItem,
+    BatchSource,
 )
 from ..auth import require_attendee, require_organizer, get_current_user
 from ..services.ml_pipeline import detect_and_embed, embedding_to_bytes, get_pipeline_version
@@ -22,6 +23,11 @@ from ..services.clustering import match_selfie_to_cluster, merge_clusters
 from ..services.storage import generate_presigned_url
 from ..services.selfie_quality import SelfieQualityError, select_selfie_face
 from ..services.zip_stream import stream_zip
+from ..services.photo_stages import (
+    combined_photo_stage,
+    drive_stage_for_photo,
+    r2_stage_for_photo,
+)
 from ..schemas import (
     SelfieScanResponse, PhotoResponse, ClusterResponse, ClusterMergeRequest,
     DeleteSelfieResponse, ConsentRequest, ConsentResponse, MessageResponse
@@ -30,6 +36,52 @@ from ..config import get_settings
 
 settings = get_settings()
 router = APIRouter(prefix="/faces", tags=["Faces"])
+
+
+async def _drive_import_photo_ids(
+    db: AsyncSession,
+    photo_ids: list[uuid.UUID],
+) -> set[uuid.UUID]:
+    if not photo_ids:
+        return set()
+    rows = await db.execute(
+        select(ProcessingBatchItem.photo_id)
+        .join(ProcessingBatch, ProcessingBatch.id == ProcessingBatchItem.batch_id)
+        .where(
+            ProcessingBatchItem.photo_id.in_(photo_ids),
+            ProcessingBatch.source == BatchSource.drive_import,
+        )
+        .distinct()
+    )
+    return {photo_id for photo_id in rows.scalars().all() if photo_id is not None}
+
+
+def _photo_response(photo: Photo, *, is_drive_import: bool) -> PhotoResponse:
+    return PhotoResponse(
+        id=photo.id,
+        filename=photo.filename,
+        status=photo.status,
+        error_message=photo.error_message,
+        ingestion_stage=photo.ingestion_stage,
+        processing_stage=photo.processing_stage,
+        stage=combined_photo_stage(
+            photo.ingestion_stage,
+            photo.processing_stage,
+        ),
+        drive_stage=drive_stage_for_photo(
+            photo.ingestion_stage,
+            is_drive_import=is_drive_import,
+        ),
+        r2_stage=r2_stage_for_photo(photo.ingestion_stage),
+        stage_error=photo.stage_error,
+        uploaded_at=photo.uploaded_at,
+        thumbnail_url=(
+            generate_presigned_url(photo.thumbnail_key, expires_in=3600)
+            if photo.thumbnail_key
+            else None
+        ),
+        original_size_bytes=photo.original_size_bytes or 0,
+    )
 
 
 class PersonLabelUpdate(BaseModel):

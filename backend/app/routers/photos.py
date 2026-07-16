@@ -14,13 +14,13 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status, BackgroundTasks, Query
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, exists, func, select, update
 
 from ..database import get_db, async_session_maker
 from ..models import (
     Photo, PhotoStatus, Event, Subscription, User, AuditLog, FaceDetection,
     FaceCluster, BatchItemStatus, BatchSource, BatchStatus, ProcessingBatch,
-    ProcessingBatchItem,
+    ProcessingBatchItem, PhotoIngestionStage, PhotoProcessingStage,
 )
 from ..auth import require_organizer, require_attendee, get_current_user
 from ..services.storage import (
@@ -41,6 +41,14 @@ from ..services.telemetry import (
     detect_runtime_processor, record_completion_sync, set_local_processor,
 )
 from ..services.event_lock import lock_event_face_mutation
+from ..services.photo_stages import (
+    INGESTION_STAGE_VALUES,
+    PHOTO_STAGE_FILTER_VALUES,
+    combined_photo_stage,
+    drive_stage_for_photo,
+    r2_stage_for_photo,
+    sanitize_stage_error,
+)
 from ..config import get_settings
 
 settings = get_settings()
@@ -424,6 +432,9 @@ async def upload_photos(
                 mime_type=mime,
                 content_hash=content_hash,
                 status=PhotoStatus.queued,
+                ingestion_stage=PhotoIngestionStage.r2_uploaded,
+                processing_stage=PhotoProcessingStage.queued,
+                stage_error=None,
             )
             db.add(photo)
             await db.flush()   # get photo.id assigned before Celery dispatch
@@ -631,6 +642,9 @@ async def import_from_drive(
             mime_type=f["mimeType"],
             content_hash=None,
             status=PhotoStatus.queued,
+            ingestion_stage=PhotoIngestionStage.drive_queued,
+            processing_stage=PhotoProcessingStage.not_started,
+            stage_error=None,
         )
         db.add(photo)
         await db.flush()
@@ -816,6 +830,7 @@ async def list_event_photos(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=200),
     status_filter: Literal["all", "queued", "processing", "done", "failed"] = "all",
+    stage_filter: str = Query(default="all", max_length=40),
     q: Optional[str] = Query(default=None, max_length=120),
 ):
     await _get_event_or_404(event_id, current_user.tenant_id, db)
@@ -823,6 +838,31 @@ async def list_event_photos(
     filters = [Photo.event_id == event_id]
     if status_filter != "all":
         filters.append(Photo.status == PhotoStatus(status_filter))
+    if stage_filter != "all":
+        if stage_filter not in PHOTO_STAGE_FILTER_VALUES:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": "Invalid photo stage filter",
+                    "allowed": ["all", *PHOTO_STAGE_FILTER_VALUES],
+                },
+            )
+        if stage_filter in INGESTION_STAGE_VALUES:
+            filters.append(
+                Photo.ingestion_stage == PhotoIngestionStage(stage_filter)
+            )
+        else:
+            processing_filter_map = {
+                "processing_not_started": PhotoProcessingStage.not_started,
+                "processing_queued": PhotoProcessingStage.queued,
+                "processing": PhotoProcessingStage.processing,
+                "processed": PhotoProcessingStage.processed,
+                "processing_failed": PhotoProcessingStage.failed,
+                "cancelled": PhotoProcessingStage.cancelled,
+            }
+            filters.append(
+                Photo.processing_stage == processing_filter_map[stage_filter]
+            )
     if q and q.strip():
         filters.append(Photo.filename.ilike(f"%{q.strip()}%"))
 
@@ -835,8 +875,20 @@ async def list_event_photos(
         .group_by(FaceDetection.photo_id)
         .subquery()
     )
+    is_drive_import = exists(
+        select(ProcessingBatchItem.id)
+        .join(ProcessingBatch, ProcessingBatch.id == ProcessingBatchItem.batch_id)
+        .where(
+            ProcessingBatchItem.photo_id == Photo.id,
+            ProcessingBatch.source == BatchSource.drive_import,
+        )
+    ).label("is_drive_import")
     result = await db.execute(
-        select(Photo, func.coalesce(face_counts.c.face_count, 0))
+        select(
+            Photo,
+            func.coalesce(face_counts.c.face_count, 0),
+            is_drive_import,
+        )
         .outerjoin(face_counts, face_counts.c.photo_id == Photo.id)
         .where(*filters)
         .order_by(Photo.uploaded_at.desc())
@@ -845,7 +897,7 @@ async def list_event_photos(
     rows = result.all()
 
     out = []
-    for p, face_count in rows:
+    for p, face_count, is_drive in rows:
         thumb_url = generate_presigned_url(p.thumbnail_key, expires_in=3600) if p.thumbnail_key else None
         preview_url = generate_presigned_url(p.original_key, expires_in=1800) if p.original_key else thumb_url
         out.append(PhotoResponse(
@@ -853,6 +905,18 @@ async def list_event_photos(
             filename=p.filename,
             status=p.status,
             error_message=p.error_message,
+            ingestion_stage=p.ingestion_stage,
+            processing_stage=p.processing_stage,
+            stage=combined_photo_stage(
+                p.ingestion_stage,
+                p.processing_stage,
+            ),
+            drive_stage=drive_stage_for_photo(
+                p.ingestion_stage,
+                is_drive_import=bool(is_drive),
+            ),
+            r2_stage=r2_stage_for_photo(p.ingestion_stage),
+            stage_error=p.stage_error,
             uploaded_at=p.uploaded_at,
             thumbnail_url=thumb_url,
             preview_url=preview_url,
@@ -918,6 +982,8 @@ async def process_photo_now(
         if photo.status != PhotoStatus.processing:
             photo.status = PhotoStatus.queued
             photo.error_message = None
+            photo.processing_stage = PhotoProcessingStage.queued
+            photo.stage_error = None
         message = (
             "Photo is already processing."
             if not dispatch_items and photo.status == PhotoStatus.processing
@@ -926,6 +992,9 @@ async def process_photo_now(
     else:
         photo.status = PhotoStatus.queued
         photo.error_message = None
+        photo.ingestion_stage = PhotoIngestionStage.r2_uploaded
+        photo.processing_stage = PhotoProcessingStage.queued
+        photo.stage_error = None
         processing_batch = await create_batch(
             db,
             tenant_id=photo.tenant_id,
@@ -987,6 +1056,8 @@ async def cancel_photo_processing(
         batch_finalizing = batch_finalizing or transition.batch_finalizing
     photo.status = PhotoStatus.failed
     photo.error_message = "Cancelled by organizer"
+    photo.processing_stage = PhotoProcessingStage.cancelled
+    photo.stage_error = "Cancelled by organizer"
     await db.commit()
     if batch_finalizing:
         await _schedule_recluster_if_idle(photo.event_id)
@@ -1180,7 +1251,12 @@ async def reprocess_event_faces(
     await db.execute(
         update(Photo)
         .where(Photo.event_id == event_id)
-        .values(status=PhotoStatus.queued, error_message=None)
+        .values(
+            status=PhotoStatus.queued,
+            error_message=None,
+            processing_stage=PhotoProcessingStage.queued,
+            stage_error=None,
+        )
     )
     processing_batch = await seal_batch(
         db,
@@ -1436,6 +1512,13 @@ async def retry_failed_photos(
         for photo, source_ref in photos_with_refs:
             photo.status = PhotoStatus.queued
             photo.error_message = None
+            photo.stage_error = None
+            if source == BatchSource.drive_import:
+                photo.ingestion_stage = PhotoIngestionStage.drive_queued
+                photo.processing_stage = PhotoProcessingStage.not_started
+            else:
+                photo.ingestion_stage = PhotoIngestionStage.r2_uploaded
+                photo.processing_stage = PhotoProcessingStage.queued
             item = await append_item(
                 db,
                 batch_id=processing_batch.id,

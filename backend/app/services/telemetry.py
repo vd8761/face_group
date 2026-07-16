@@ -274,6 +274,9 @@ class _ProcessSampler:
         )
         self.hostname = socket.gethostname()
         self.key = f"{KEY_PREFIX}:heartbeat:{component}:{self.hostname}:{os.getpid()}"
+        from .deployment_identity import database_fingerprint
+
+        self.database_fingerprint = database_fingerprint()
         self._processes: dict[int, Any] = {}
         self._nvml_ready = False
         self.cpu_capacity = 1.0
@@ -354,6 +357,7 @@ class _ProcessSampler:
             "host_id": self.hostname,
             "pid": os.getpid(),
             "processor": processor,
+            "database_fingerprint": self.database_fingerprint,
             "timestamp": time.time(),
             "cpu_capacity": self.cpu_capacity,
         }
@@ -407,6 +411,24 @@ def _aggregate_resource_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
             continue
 
     workers = [row for row in fresh if row.get("component") == "worker"]
+    web_fingerprints = {
+        str(row.get("database_fingerprint"))
+        for row in fresh
+        if row.get("component") == "web" and row.get("database_fingerprint")
+    }
+    worker_fingerprints = {
+        str(row.get("database_fingerprint"))
+        for row in workers
+        if row.get("database_fingerprint")
+    }
+    database_mismatch = bool(
+        web_fingerprints
+        and worker_fingerprints
+        and (len(web_fingerprints | worker_fingerprints) > 1)
+    )
+    web_database_fingerprint = (
+        sorted(web_fingerprints)[0] if web_fingerprints else None
+    )
     processors = {
         row.get("processor") for row in workers if row.get("processor") in ("cpu", "gpu")
     }
@@ -466,6 +488,8 @@ def _aggregate_resource_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "gpu_memory_total_bytes": gpu_total,
         "worker_count": len(workers),
         "stale": len(workers) == 0,
+        "database_mismatch": database_mismatch,
+        "database_fingerprint": web_database_fingerprint,
     }
 
 

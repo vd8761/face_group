@@ -19,6 +19,45 @@ class ProcessingLeaseBusy(RuntimeError):
     """A prior delivery still owns a non-expired durable item lease."""
 
 
+class DurableItemMissing(RuntimeError):
+    """A published durable item is not yet visible to this worker."""
+
+
+MISSING_ITEM_GRACE_RETRIES = 5
+
+
+def _missing_item_retry_delay(retries: int) -> int:
+    return min(30, 2 * (2 ** max(0, int(retries))))
+
+
+def _missing_item_error(
+    *,
+    entity: str,
+    entity_id: object,
+    publisher_db_fingerprint: str | None,
+) -> DurableItemMissing:
+    from ..services.deployment_identity import database_fingerprint
+
+    worker_fingerprint = database_fingerprint()
+    mismatch = bool(
+        publisher_db_fingerprint
+        and publisher_db_fingerprint != worker_fingerprint
+    )
+    if mismatch:
+        message = (
+            f"{entity} {entity_id} is missing due to database deployment mismatch "
+            f"(publisher={publisher_db_fingerprint}, worker={worker_fingerprint})"
+        )
+        logger.error(message)
+    else:
+        message = (
+            f"{entity} {entity_id} is not visible yet "
+            f"(database={worker_fingerprint})"
+        )
+        logger.warning(message)
+    return DurableItemMissing(message)
+
+
 def run_async(coro):
     """Run worker coroutines on one loop so pooled DB connections stay valid."""
     global _worker_loop
@@ -53,6 +92,7 @@ def process_photo(
     tenant_id: str | None = None,
     event_id: str | None = None,
     batch_item_id: str | None = None,
+    publisher_db_fingerprint: str | None = None,
 ):
     """Detect, embed, persist, and group one photo.
 
@@ -69,6 +109,7 @@ def process_photo(
         BatchSource,
         FaceDetection,
         Photo,
+        PhotoProcessingStage,
         PhotoStatus,
         ProcessingBatchItem,
     )
@@ -81,6 +122,7 @@ def process_photo(
     from ..services.clustering import assign_to_cluster, create_new_cluster
     from ..services.event_lock import lock_event_face_mutation
     from ..services.ml_pipeline import detect_and_embed, embedding_to_bytes
+    from ..services.photo_stages import sanitize_stage_error
     from ..services.storage import stream_object, upload_face_crop
     from ..services.telemetry import (
         detect_runtime_processor,
@@ -107,28 +149,34 @@ def process_photo(
             result = await db.execute(select(Photo).where(Photo.id == photo_uuid))
             photo = result.scalar_one_or_none()
             if not photo:
-                logger.error("Photo %s not found", photo_id)
                 if item_uuid is not None:
                     row = await get_item_context(db, item_id=item_uuid)
-                    if row is not None:
-                        item, batch, _missing_photo = row
-                        context["item_validated"] = True
-                        context["tenant_id"] = batch.tenant_id
-                        context["event_id"] = batch.event_id
-                        transition = await mark_item_terminal(
-                            db,
-                            item_id=item.id,
-                            status=BatchItemStatus.cancelled,
-                            error_message="Photo was removed before processing started",
+                    if row is None:
+                        raise _missing_item_error(
+                            entity="Processing batch item",
+                            entity_id=item_uuid,
+                            publisher_db_fingerprint=publisher_db_fingerprint,
                         )
-                        await db.commit()
-                        if transition.applied:
-                            record_completion_sync(
-                                batch_id=transition.batch_id,
-                                tenant_id=transition.tenant_id,
-                                faces_detected=0,
-                                images=0,
-                            )
+                    item, batch, _missing_photo = row
+                    context["item_validated"] = True
+                    context["tenant_id"] = batch.tenant_id
+                    context["event_id"] = batch.event_id
+                    transition = await mark_item_terminal(
+                        db,
+                        item_id=item.id,
+                        status=BatchItemStatus.cancelled,
+                        error_message="Photo was removed before processing started",
+                    )
+                    await db.commit()
+                    if transition.applied:
+                        record_completion_sync(
+                            batch_id=transition.batch_id,
+                            tenant_id=transition.tenant_id,
+                            faces_detected=0,
+                            images=0,
+                        )
+                else:
+                    logger.info("Legacy photo %s no longer exists", photo_id)
                 return
 
             # Old task arguments are not trusted as scope, but mismatches are a
@@ -197,6 +245,8 @@ def process_photo(
             if photo.status == PhotoStatus.failed and item_uuid is None:
                 return
             if photo.status == PhotoStatus.done and not explicit_rebuild:
+                photo.processing_stage = PhotoProcessingStage.processed
+                photo.stage_error = None
                 if item_uuid is not None:
                     face_count = (await db.execute(
                         select(sa_func.count(FaceDetection.id)).where(
@@ -238,6 +288,8 @@ def process_photo(
 
             photo.status = PhotoStatus.processing
             photo.error_message = None
+            photo.processing_stage = PhotoProcessingStage.processing
+            photo.stage_error = None
             if item_uuid is not None:
                 await db.commit()
             else:
@@ -338,6 +390,8 @@ def process_photo(
                     )
 
             photo.status = PhotoStatus.done
+            photo.processing_stage = PhotoProcessingStage.processed
+            photo.stage_error = None
             transition = None
             if item_uuid is not None:
                 current_item = (await db.execute(
@@ -395,6 +449,18 @@ def process_photo(
 
     try:
         run_async(_run())
+    except DurableItemMissing as exc:
+        if self.request.retries < MISSING_ITEM_GRACE_RETRIES:
+            raise self.retry(
+                exc=exc,
+                countdown=_missing_item_retry_delay(self.request.retries),
+                max_retries=MISSING_ITEM_GRACE_RETRIES,
+            )
+        logger.error(
+            "Discarding stale process-photo delivery after visibility grace: %s",
+            exc,
+        )
+        return "missing-stale"
     except ProcessingLeaseBusy as exc:
         raise self.retry(exc=exc, countdown=60, max_retries=20)
     except Exception as exc:
@@ -416,6 +482,8 @@ def process_photo(
                         )).scalar_one_or_none()
                         if retry_photo and released:
                             retry_photo.status = PhotoStatus.queued
+                            retry_photo.processing_stage = PhotoProcessingStage.queued
+                            retry_photo.stage_error = sanitize_stage_error(exc_str)
                         await retry_db.commit()
                 try:
                     run_async(_release_for_retry())
@@ -459,6 +527,8 @@ def process_photo(
                 ):
                     failed_photo.status = PhotoStatus.failed
                     failed_photo.error_message = exc_str[:500]
+                    failed_photo.processing_stage = PhotoProcessingStage.failed
+                    failed_photo.stage_error = sanitize_stage_error(exc_str)
                     if item_uuid is None:
                         legacy_failure_holder["value"] = True
                 if item_uuid is None and context["safe_to_mutate"] and context.get("event_id"):
@@ -506,7 +576,11 @@ def process_photo(
     soft_time_limit=840,
     name="app.workers.tasks.import_drive_item",
 )
-def import_drive_item(self, batch_item_id: str):
+def import_drive_item(
+    self,
+    batch_item_id: str,
+    publisher_db_fingerprint: str | None = None,
+):
     """Durably download one Drive placeholder, then enqueue face processing."""
     import hashlib
 
@@ -519,6 +593,8 @@ def import_drive_item(self, batch_item_id: str):
         BatchItemStatus,
         BatchSource,
         Photo,
+        PhotoIngestionStage,
+        PhotoProcessingStage,
         PhotoStatus,
         Subscription,
     )
@@ -533,6 +609,7 @@ def import_drive_item(self, batch_item_id: str):
         DriveDownloadLimiterUnavailable,
         wait_for_drive_download_slot,
     )
+    from ..services.photo_stages import sanitize_stage_error
     from ..services.storage import upload_original, upload_thumbnail
     from ..services.telemetry import record_completion_sync
 
@@ -543,7 +620,11 @@ def import_drive_item(self, batch_item_id: str):
         async with AsyncSessionLocal() as db:
             row = await get_item_context(db, item_id=item_uuid)
             if row is None:
-                return "missing"
+                raise _missing_item_error(
+                    entity="Drive batch item",
+                    entity_id=item_uuid,
+                    publisher_db_fingerprint=publisher_db_fingerprint,
+                )
             item, batch, photo = row
             if item.status in (
                 BatchItemStatus.succeeded,
@@ -551,14 +632,26 @@ def import_drive_item(self, batch_item_id: str):
                 BatchItemStatus.skipped,
                 BatchItemStatus.cancelled,
             ):
+                if (
+                    item.status == BatchItemStatus.cancelled
+                    and photo is not None
+                    and photo.processing_stage != PhotoProcessingStage.processed
+                ):
+                    photo.processing_stage = PhotoProcessingStage.cancelled
+                    await db.commit()
                 return "terminal"
             if batch.source != BatchSource.drive_import or photo is None:
+                error = "Invalid Drive import batch item"
                 transition = await mark_item_terminal(
                     db,
                     item_id=item.id,
                     status=BatchItemStatus.failed,
-                    error_message="Invalid Drive import batch item",
+                    error_message=error,
                 )
+                if photo is not None and transition.applied:
+                    photo.status = PhotoStatus.failed
+                    photo.processing_stage = PhotoProcessingStage.cancelled
+                    photo.stage_error = error
                 await db.commit()
                 if transition.applied:
                     record_completion_sync(
@@ -585,6 +678,9 @@ def import_drive_item(self, batch_item_id: str):
 
             photo.status = PhotoStatus.processing
             photo.error_message = None
+            photo.ingestion_stage = PhotoIngestionStage.drive_downloading
+            photo.processing_stage = PhotoProcessingStage.not_started
+            photo.stage_error = None
             await db.commit()
 
             # A prior delivery may have committed the storage stage and died
@@ -595,6 +691,9 @@ def import_drive_item(self, batch_item_id: str):
                 )
                 if released:
                     photo.status = PhotoStatus.queued
+                    photo.ingestion_stage = PhotoIngestionStage.r2_uploaded
+                    photo.processing_stage = PhotoProcessingStage.queued
+                    photo.stage_error = None
                 await db.commit()
                 if released:
                     try:
@@ -604,33 +703,53 @@ def import_drive_item(self, batch_item_id: str):
                 return "already-downloaded"
 
             if not settings.GOOGLE_DRIVE_API_KEY or not item.source_ref:
-                raise ValueError("Google Drive import is not configured")
+                error = "Google Drive import is not configured"
+                photo.ingestion_stage = PhotoIngestionStage.drive_download_failed
+                photo.stage_error = error
+                await db.commit()
+                raise ValueError(error)
 
             download_url = (
                 f"https://www.googleapis.com/drive/v3/files/{item.source_ref}"
                 f"?alt=media&key={settings.GOOGLE_DRIVE_API_KEY}"
             )
-            async with httpx.AsyncClient(timeout=180) as client:
-                # This Redis-authoritative gate is the final authority across
-                # every organization and worker.  It intentionally sits next
-                # to the media request so metadata work and already-downloaded
-                # recovery paths do not consume a slot.
-                await wait_for_drive_download_slot(
-                    redis_url=settings.REDIS_URL,
-                    downloads_per_minute=getattr(
-                        settings, "DRIVE_DOWNLOADS_PER_MINUTE", 20
-                    ),
-                )
-                response = await client.get(
-                    download_url,
-                    headers={"User-Agent": "Mozilla/5.0 (compatible; PhotoGroup/2.0)"},
-                    follow_redirects=True,
-                )
-            if response.status_code != 200:
-                raise ValueError(f"Drive download failed: HTTP {response.status_code}")
-            data = response.content
-            if len(data) > settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024:
-                raise ValueError("Drive image exceeds the upload size limit")
+            try:
+                async with httpx.AsyncClient(timeout=180) as client:
+                    # This Redis-authoritative gate is the final authority
+                    # across every organization and worker. It intentionally
+                    # sits next to the media request so metadata work and
+                    # already-downloaded recovery paths do not consume a slot.
+                    await wait_for_drive_download_slot(
+                        redis_url=settings.REDIS_URL,
+                        downloads_per_minute=getattr(
+                            settings, "DRIVE_DOWNLOADS_PER_MINUTE", 20
+                        ),
+                    )
+                    response = await client.get(
+                        download_url,
+                        headers={
+                            "User-Agent": "Mozilla/5.0 (compatible; PhotoGroup/2.0)"
+                        },
+                        follow_redirects=True,
+                    )
+                if response.status_code != 200:
+                    raise ValueError(
+                        f"Drive download failed: HTTP {response.status_code}"
+                    )
+                data = response.content
+                if len(data) > settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024:
+                    raise ValueError("Drive image exceeds the upload size limit")
+            except DriveDownloadLimiterUnavailable:
+                raise
+            except Exception as download_exc:
+                photo.ingestion_stage = PhotoIngestionStage.drive_download_failed
+                photo.stage_error = sanitize_stage_error(download_exc)
+                await db.commit()
+                raise
+
+            photo.ingestion_stage = PhotoIngestionStage.drive_downloaded
+            photo.stage_error = None
+            await db.commit()
             content_hash = hashlib.sha256(data).hexdigest()
             duplicate = (await db.execute(
                 select(Photo.id).where(
@@ -657,21 +776,30 @@ def import_drive_item(self, batch_item_id: str):
                     )
                 return "duplicate"
 
-            original_key = await upload_original(
-                data,
-                batch.tenant_id,
-                batch.event_id,
-                photo.id,
-                photo.filename,
-                photo.mime_type,
-            )
-            thumbnail_key = await upload_thumbnail(
-                data,
-                batch.tenant_id,
-                batch.event_id,
-                photo.id,
-                filename=photo.filename,
-            )
+            photo.ingestion_stage = PhotoIngestionStage.r2_uploading
+            photo.stage_error = None
+            await db.commit()
+            try:
+                original_key = await upload_original(
+                    data,
+                    batch.tenant_id,
+                    batch.event_id,
+                    photo.id,
+                    photo.filename,
+                    photo.mime_type,
+                )
+                thumbnail_key = await upload_thumbnail(
+                    data,
+                    batch.tenant_id,
+                    batch.event_id,
+                    photo.id,
+                    filename=photo.filename,
+                )
+            except Exception as upload_exc:
+                photo.ingestion_stage = PhotoIngestionStage.r2_upload_failed
+                photo.stage_error = sanitize_stage_error(upload_exc)
+                await db.commit()
+                raise
             file_size = len(data)
             del data
 
@@ -679,6 +807,9 @@ def import_drive_item(self, batch_item_id: str):
             photo.thumbnail_key = thumbnail_key
             photo.original_size_bytes = file_size
             photo.content_hash = content_hash
+            photo.ingestion_stage = PhotoIngestionStage.r2_uploaded
+            photo.processing_stage = PhotoProcessingStage.queued
+            photo.stage_error = None
             released = await mark_item_retrying(db, item_id=item.id, error_message=None)
             if released:
                 photo.status = PhotoStatus.queued
@@ -697,19 +828,40 @@ def import_drive_item(self, batch_item_id: str):
                     logger.warning("Drive face dispatch deferred: %s", dispatch_exc)
             return "downloaded"
 
-    async def _release_transient(error_message: str) -> bool:
+    async def _release_transient(
+        error_message: str,
+        *,
+        reset_to_drive_queue: bool = False,
+    ) -> bool:
         async with AsyncSessionLocal() as db:
             released = await mark_item_retrying(
                 db, item_id=item_uuid, error_message=error_message
             )
             row = await get_item_context(db, item_id=item_uuid)
             if released and row is not None and row[2] is not None:
-                row[2].status = PhotoStatus.queued
+                retry_photo = row[2]
+                retry_photo.status = PhotoStatus.queued
+                retry_photo.processing_stage = PhotoProcessingStage.not_started
+                if reset_to_drive_queue:
+                    retry_photo.ingestion_stage = PhotoIngestionStage.drive_queued
+                retry_photo.stage_error = sanitize_stage_error(error_message)
             await db.commit()
             return released
 
     try:
         return run_async(_run())
+    except DurableItemMissing as exc:
+        if self.request.retries < MISSING_ITEM_GRACE_RETRIES:
+            raise self.retry(
+                exc=exc,
+                countdown=_missing_item_retry_delay(self.request.retries),
+                max_retries=MISSING_ITEM_GRACE_RETRIES,
+            )
+        logger.error(
+            "Discarding stale Drive delivery after visibility grace: %s",
+            exc,
+        )
+        return "missing-stale"
     except ProcessingLeaseBusy as exc:
         raise self.retry(exc=exc, countdown=60, max_retries=20)
     except DriveDownloadLimiterUnavailable as exc:
@@ -718,7 +870,9 @@ def import_drive_item(self, batch_item_id: str):
         # dispatcher instead of consuming the task's finite error retry budget.
         # The recovery loop will republish it when infrastructure is healthy.
         try:
-            released = run_async(_release_transient(str(exc)))
+            released = run_async(
+                _release_transient(str(exc), reset_to_drive_queue=True)
+            )
         except Exception as release_exc:
             logger.warning(
                 "Could not release Drive item %s after limiter outage: %s",
@@ -755,6 +909,8 @@ def import_drive_item(self, batch_item_id: str):
                 if transition.applied and photo is not None:
                     photo.status = PhotoStatus.failed
                     photo.error_message = exc_text[:500]
+                    photo.processing_stage = PhotoProcessingStage.cancelled
+                    photo.stage_error = sanitize_stage_error(exc_text)
                 await db.commit()
                 return transition
 

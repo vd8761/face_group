@@ -686,7 +686,7 @@ textarea.input { height: auto; padding: 0.75rem 0.875rem; resize: vertical; }
 }
 .photo-table {
   border-collapse: collapse;
-  min-width: 860px;
+  min-width: 1040px;
   width: 100%;
 }
 .photo-table th,
@@ -741,6 +741,7 @@ textarea.input { height: auto; padding: 0.75rem 0.875rem; resize: vertical; }
 }
 .photo-file-cell span { color: var(--text-1); font-weight: 650; }
 .photo-file-cell small { color: var(--error); }
+.photo-table .badge { white-space: nowrap; }
 .photo-row-actions { justify-content: flex-end; }
 .photo-ops-footer {
   border-top: 1px solid var(--border);

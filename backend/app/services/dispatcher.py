@@ -17,6 +17,8 @@ from ..models import (
     BatchSource,
     BatchStatus,
     Photo,
+    PhotoIngestionStage,
+    PhotoProcessingStage,
     PhotoStatus,
     ProcessingBatch,
     ProcessingBatchItem,
@@ -28,13 +30,18 @@ from .batch_tracking import (
     seal_batch,
 )
 from .event_lock import lock_event_face_mutation
+from .deployment_identity import database_fingerprint
+from .photo_stages import sanitize_stage_error
 
 
 logger = logging.getLogger(__name__)
 DISPATCH_QUEUE = "face-v2"
 DRIVE_DOWNLOAD_QUEUE = "drive-downloads"
 DISPATCH_CLAIM_TIMEOUT_SECONDS = 60
-PUBLISHED_TASK_RECHECK_SECONDS = 24 * 60 * 60
+# A broker ACK without a corresponding task start must not strand a visible
+# queued photo for a day. Item claiming remains the idempotency guard when a
+# slow-but-live delivery overlaps this bounded recovery publish.
+PUBLISHED_TASK_RECHECK_SECONDS = 15 * 60
 PROCESSING_LEASE_SECONDS = 17 * 60
 LEGACY_PHOTO_ADOPTION_SECONDS = 30 * 60
 LEGACY_ADOPTION_STARTUP_GRACE_SECONDS = 30 * 60
@@ -147,12 +154,15 @@ async def _publish(record: DispatchRecord) -> bool:
     try:
         from ..workers.tasks import import_drive_item, process_photo
 
+        publisher_db_fingerprint = database_fingerprint()
+
         if record.source == BatchSource.drive_import and not record.original_key:
             if not record.source_ref:
                 raise ValueError("Drive batch item has no source file identifier")
             result = await asyncio.to_thread(
                 import_drive_item.apply_async,
                 args=[str(record.item_id)],
+                kwargs={"publisher_db_fingerprint": publisher_db_fingerprint},
                 queue=DRIVE_DOWNLOAD_QUEUE,
             )
         else:
@@ -163,7 +173,10 @@ async def _publish(record: DispatchRecord) -> bool:
                     str(record.tenant_id),
                     str(record.event_id),
                 ],
-                kwargs={"batch_item_id": str(record.item_id)},
+                kwargs={
+                    "batch_item_id": str(record.item_id),
+                    "publisher_db_fingerprint": publisher_db_fingerprint,
+                },
                 queue=DISPATCH_QUEUE,
             )
         await _finish_dispatch_claim(record, task_id=str(result.id))
@@ -284,12 +297,19 @@ async def _adopt_stale_untracked_photos() -> int:
                 recoverable.append(photo)
                 photo.status = PhotoStatus.queued
                 photo.error_message = None
+                photo.ingestion_stage = PhotoIngestionStage.r2_uploaded
+                photo.processing_stage = PhotoProcessingStage.queued
+                photo.stage_error = None
             else:
-                photo.status = PhotoStatus.failed
-                photo.error_message = (
+                error = (
                     "The original Drive file was never stored. Select it again "
                     "in Google Drive to re-import it."
                 )
+                photo.status = PhotoStatus.failed
+                photo.error_message = error
+                photo.ingestion_stage = PhotoIngestionStage.drive_download_failed
+                photo.processing_stage = PhotoProcessingStage.cancelled
+                photo.stage_error = error
 
         if recoverable:
             exemplar = recoverable[0]
@@ -355,6 +375,13 @@ async def _recover_stale_items() -> set[uuid.UUID]:
             if photo is not None and photo.status != PhotoStatus.done:
                 photo.status = PhotoStatus.queued
                 photo.error_message = None
+                if batch.source == BatchSource.drive_import and not photo.original_key:
+                    photo.ingestion_stage = PhotoIngestionStage.drive_queued
+                    photo.processing_stage = PhotoProcessingStage.not_started
+                else:
+                    photo.ingestion_stage = PhotoIngestionStage.r2_uploaded
+                    photo.processing_stage = PhotoProcessingStage.queued
+                photo.stage_error = sanitize_stage_error(item.error_message)
             affected_events.add(batch.event_id)
 
         orphan_rows = (await db.execute(

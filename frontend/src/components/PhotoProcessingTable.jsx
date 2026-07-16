@@ -4,15 +4,70 @@ import {
   ScanFace, Search, Trash2, Upload, X
 } from 'lucide-react';
 import api, { getApiErrorMessage } from '../api/client';
-import { photoStage } from '../lib/statusSteps';
+import { photoPipelineStages } from '../lib/statusSteps';
 
-const STATUS_OPTIONS = [
-  { value: 'all', label: 'All statuses' },
-  { value: 'queued', label: 'Queued (U/P)' },
-  { value: 'processing', label: 'Processing' },
-  { value: 'failed', label: 'Failed' },
-  { value: 'done', label: 'Processed' },
+const STAGE_OPTION_GROUPS = [
+  {
+    label: 'Google Drive',
+    options: [
+      { value: 'drive_queued', label: 'Drive queued' },
+      { value: 'drive_downloading', label: 'Drive downloading' },
+      { value: 'drive_downloaded', label: 'Drive downloaded' },
+      { value: 'drive_download_failed', label: 'Drive failed' },
+    ],
+  },
+  {
+    label: 'R2 storage',
+    options: [
+      { value: 'r2_uploading', label: 'Uploading to R2' },
+      { value: 'r2_uploaded', label: 'Uploaded to R2' },
+      { value: 'r2_upload_failed', label: 'R2 upload failed' },
+    ],
+  },
+  {
+    label: 'Face processing',
+    options: [
+      { value: 'processing_not_started', label: 'Processing not started' },
+      { value: 'processing_queued', label: 'Processing queued' },
+      { value: 'processing', label: 'Processing' },
+      { value: 'processed', label: 'Processed' },
+      { value: 'processing_failed', label: 'Processing failed' },
+      { value: 'cancelled', label: 'Cancelled' },
+    ],
+  },
 ];
+
+const ACTIVE_STAGES = new Set([
+  'uploading',
+  'drive_queued',
+  'drive_downloading',
+  'drive_downloaded',
+  'r2_uploading',
+  'r2_uploaded',
+  'processing_not_started',
+  'processing_queued',
+  'not_started',
+  'queued',
+  'processing',
+]);
+
+function legacyStatusForStage(stage) {
+  if (['drive_download_failed', 'r2_upload_failed', 'processing_failed', 'cancelled'].includes(stage)) return 'failed';
+  if (['drive_downloading', 'r2_uploading', 'processing'].includes(stage)) return 'processing';
+  if (stage === 'processed') return 'done';
+  return 'queued';
+}
+
+function hasStageContract(photo) {
+  return ['stage', 'ingestion_stage', 'drive_stage', 'r2_stage', 'processing_stage']
+    .some((field) => Object.prototype.hasOwnProperty.call(photo || {}, field));
+}
+
+function isPhotoActive(photo) {
+  const stage = photo?.stage || photo?.ingestion_stage || photo?.processing_stage;
+  if (stage) return ACTIVE_STAGES.has(stage);
+  return photo?.status === 'queued' || photo?.status === 'processing';
+}
 
 function formatBytes(bytes) {
   const value = Number(bytes || 0);
@@ -22,8 +77,7 @@ function formatBytes(bytes) {
   return `${value} B`;
 }
 
-function StatusBadge({ photo }) {
-  const stage = photoStage(photo);
+function PipelineBadge({ stage }) {
   return <span className={`badge ${stage.cls}`} title={stage.title}>{stage.label}</span>;
 }
 
@@ -122,7 +176,8 @@ export default function PhotoProcessingTable({
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const [statusFilter, setStatusFilter] = useState('all');
+  const [stageFilter, setStageFilter] = useState('all');
+  const [supportsStageFilter, setSupportsStageFilter] = useState(null);
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -140,22 +195,30 @@ export default function PhotoProcessingTable({
     setLoading(true);
     setError('');
     try {
+      const filteringByStage = stageFilter !== 'all';
+      const useLegacyFilter = filteringByStage && supportsStageFilter === false;
       const { data } = await api.get(`/api/photos/events/${eventId}`, {
         params: {
           skip: (page - 1) * pageSize,
           limit: pageSize,
-          status_filter: statusFilter,
+          status_filter: useLegacyFilter ? legacyStatusForStage(stageFilter) : 'all',
+          stage_filter: filteringByStage && !useLegacyFilter ? stageFilter : undefined,
           q: query.trim() || undefined,
         },
       });
-      setPhotos(data.photos || []);
+      const rows = Array.isArray(data.photos) ? data.photos : [];
+      setPhotos(rows);
       setTotal(Number(data.total || 0));
+      if (rows.length) {
+        const detectedStageContract = rows.some(hasStageContract);
+        setSupportsStageFilter((current) => current ?? detectedStageContract);
+      }
     } catch (err) {
       setError(getApiErrorMessage(err, 'Could not load photos.'));
     } finally {
       setLoading(false);
     }
-  }, [eventId, page, pageSize, statusFilter, query]);
+  }, [eventId, page, pageSize, stageFilter, query, supportsStageFilter]);
 
   useEffect(() => {
     const timer = setTimeout(loadPhotos, query.trim() ? 250 : 0);
@@ -164,10 +227,10 @@ export default function PhotoProcessingTable({
 
   useEffect(() => {
     setPage(1);
-  }, [eventId, pageSize, statusFilter, query]);
+  }, [eventId, pageSize, stageFilter, query]);
 
   useEffect(() => {
-    const hasActiveRows = photos.some((photo) => photo.status === 'queued' || photo.status === 'processing');
+    const hasActiveRows = photos.some(isPhotoActive);
     if (!hasActiveRows) return undefined;
     const timer = setInterval(loadPhotos, 4000);
     return () => clearInterval(timer);
@@ -258,8 +321,13 @@ export default function PhotoProcessingTable({
             placeholder="Search filename"
           />
         </div>
-        <select className="input" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} aria-label="Filter photos by status">
-          {STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+        <select className="input" value={stageFilter} onChange={(event) => setStageFilter(event.target.value)} aria-label="Filter photos by pipeline stage">
+          <option value="all">All pipeline stages</option>
+          {STAGE_OPTION_GROUPS.map((group) => (
+            <optgroup key={group.label} label={group.label}>
+              {group.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </optgroup>
+          ))}
         </select>
         <select className="input" value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))} aria-label="Rows per page">
           {[10, 25, 50, 100].map((size) => <option key={size} value={size}>{size} / page</option>)}
@@ -274,7 +342,9 @@ export default function PhotoProcessingTable({
             <tr>
               <th>Preview</th>
               <th>File</th>
-              <th>Status</th>
+              <th>Drive</th>
+              <th>R2 storage</th>
+              <th>Processing</th>
               <th>Faces</th>
               <th>Size</th>
               <th>Uploaded</th>
@@ -283,13 +353,15 @@ export default function PhotoProcessingTable({
           </thead>
           <tbody>
             {loading && photos.length === 0 ? (
-              <tr><td colSpan="7" className="photo-table-empty"><Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> Loading photos</td></tr>
+              <tr><td colSpan="9" className="photo-table-empty"><Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> Loading photos</td></tr>
             ) : photos.length === 0 ? (
-              <tr><td colSpan="7" className="photo-table-empty">No photos match this view.</td></tr>
+              <tr><td colSpan="9" className="photo-table-empty">No photos match this view.</td></tr>
             ) : photos.map((photo) => {
               const processBusy = busyAction === `process:${photo.id}`;
               const cancelBusy = busyAction === `cancel:${photo.id}`;
               const removeBusy = busyAction === `remove:${photo.id}`;
+              const stages = photoPipelineStages(photo);
+              const rowError = photo.stage_error || photo.error_message;
               return (
                 <tr key={photo.id}>
                   <td>
@@ -300,10 +372,12 @@ export default function PhotoProcessingTable({
                   <td>
                     <div className="photo-file-cell">
                       <span title={photo.filename}>{photo.filename}</span>
-                      {photo.error_message && <small title={photo.error_message}>{photo.error_message}</small>}
+                      {rowError && <small title={rowError}>{rowError}</small>}
                     </div>
                   </td>
-                  <td><StatusBadge photo={photo} /></td>
+                  <td><PipelineBadge stage={stages.drive} /></td>
+                  <td><PipelineBadge stage={stages.r2} /></td>
+                  <td><PipelineBadge stage={stages.processing} /></td>
                   <td>{Number(photo.face_count || 0)}</td>
                   <td>{formatBytes(photo.original_size_bytes)}</td>
                   <td>{new Date(photo.uploaded_at).toLocaleString()}</td>

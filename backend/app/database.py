@@ -63,12 +63,47 @@ async def init_db():
 
             # photos table
             "ALTER TABLE photos ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64)",
+            "ALTER TABLE photos ADD COLUMN IF NOT EXISTS ingestion_stage VARCHAR(32)",
+            "ALTER TABLE photos ADD COLUMN IF NOT EXISTS processing_stage VARCHAR(20)",
+            "ALTER TABLE photos ADD COLUMN IF NOT EXISTS stage_error TEXT",
 
             # Durable batch recovery metadata.
             "ALTER TABLE processing_batches ADD COLUMN IF NOT EXISTS expected_images INTEGER",
             "ALTER TABLE processing_batches ADD COLUMN IF NOT EXISTS finalize_dispatched_at TIMESTAMPTZ",
             "ALTER TABLE processing_batches ADD COLUMN IF NOT EXISTS finalization_error TEXT",
             "ALTER TABLE processing_batch_items ADD COLUMN IF NOT EXISTS dispatch_attempted_at TIMESTAMPTZ",
+
+            # Backfill the two independent photo-stage axes. A missing R2 key
+            # means processing could not have started; Drive source is derived
+            # from its durable batch item rather than guessed from filenames.
+            "UPDATE photos p SET ingestion_stage = CASE "
+            "WHEN COALESCE(p.original_key, '') <> '' THEN 'r2_uploaded' "
+            "WHEN EXISTS (SELECT 1 FROM processing_batch_items i "
+            "JOIN processing_batches b ON b.id = i.batch_id "
+            "WHERE i.photo_id = p.id AND b.source::text = 'drive_import') "
+            "THEN CASE WHEN p.status::text = 'failed' THEN 'drive_download_failed' "
+            "ELSE 'drive_queued' END "
+            "ELSE 'r2_upload_failed' END "
+            "WHERE ingestion_stage IS NULL",
+            "UPDATE photos SET processing_stage = CASE "
+            "WHEN status::text = 'done' THEN 'processed' "
+            "WHEN status::text = 'processing' THEN 'processing' "
+            "WHEN status::text = 'failed' AND COALESCE(original_key, '') <> '' "
+            "THEN 'failed' "
+            "WHEN status::text = 'failed' THEN 'cancelled' "
+            "WHEN COALESCE(original_key, '') <> '' THEN 'queued' "
+            "ELSE 'not_started' END "
+            "WHERE processing_stage IS NULL",
+            "UPDATE photos SET stage_error = error_message "
+            "WHERE stage_error IS NULL AND error_message IS NOT NULL",
+            "ALTER TABLE photos ALTER COLUMN ingestion_stage SET DEFAULT 'r2_uploaded'",
+            "ALTER TABLE photos ALTER COLUMN ingestion_stage SET NOT NULL",
+            "ALTER TABLE photos ALTER COLUMN processing_stage SET DEFAULT 'queued'",
+            "ALTER TABLE photos ALTER COLUMN processing_stage SET NOT NULL",
+            "CREATE INDEX IF NOT EXISTS ix_photos_event_ingestion_stage "
+            "ON photos (event_id, ingestion_stage)",
+            "CREATE INDEX IF NOT EXISTS ix_photos_event_processing_stage "
+            "ON photos (event_id, processing_stage)",
 
             # Face task idempotency, exact pipeline identity, and durable
             # organizer grouping corrections.
