@@ -472,7 +472,7 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
       const { data } = await api.post(
         `/api/photos/events/${eventId}/import-drive`,
         { folder_url: driveUrl.trim() },
-        { timeout: 30000 }
+        { timeout: 300000 }   // 5 min — large Drive folders (1000+ files) can be slow to list
       );
       setDriveResult(data);
       setDriveUrl('');
