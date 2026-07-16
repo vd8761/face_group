@@ -1492,6 +1492,44 @@ async def get_thumbnail(
     return {"url": generate_presigned_url(photo.thumbnail_key, expires_in=1800)}
 
 
+@router.get("/{photo_id}/faces")
+async def get_photo_faces(
+    photo_id: uuid.UUID,
+    current_user: User = Depends(require_organizer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Detected faces for one photo with person names for preview overlays.
+
+    Bounding boxes are in original-image pixel coordinates, so the client can
+    scale them against the preview image's natural dimensions.
+    """
+    photo = await _get_photo_for_organizer(photo_id, current_user, db)
+    rows = (await db.execute(
+        select(FaceDetection, FaceCluster.label)
+        .outerjoin(FaceCluster, FaceCluster.id == FaceDetection.cluster_id)
+        .where(FaceDetection.photo_id == photo.id)
+        .order_by(FaceDetection.face_index, FaceDetection.created_at)
+    )).all()
+
+    faces = []
+    for detection, cluster_label in rows:
+        bbox = detection.bbox or {}
+        faces.append({
+            "id": str(detection.id),
+            "bbox": {
+                "x1": float(bbox.get("x1", 0)),
+                "y1": float(bbox.get("y1", 0)),
+                "x2": float(bbox.get("x2", 0)),
+                "y2": float(bbox.get("y2", 0)),
+            },
+            "cluster_id": str(detection.cluster_id) if detection.cluster_id else None,
+            "person_label": cluster_label,
+            "confidence": float(detection.detection_confidence or 0),
+            "is_low_quality": bool(detection.is_low_quality),
+        })
+    return {"photo_id": str(photo.id), "status": photo.status.value, "faces": faces}
+
+
 @router.get("/{photo_id}/download")
 async def get_original(
     photo_id: uuid.UUID,

@@ -12,16 +12,19 @@ import PhotoProcessingTable from '../components/PhotoProcessingTable';
 import ConfirmActionModal from '../components/ConfirmActionModal';
 import ProcessingOverview from '../components/processing/ProcessingOverview';
 import { isRunningBatch, useEventProcessing } from '../context/ProcessingContext';
+import { photoStage } from '../lib/statusSteps';
 
-const StatusBadge = ({ status }) => {
-  const map = {
-    queued:     { cls: 'badge-queued',      label: '⏳ Queued' },
-    processing: { cls: 'badge-processing',  label: '⚡ Processing' },
-    done:       { cls: 'badge-done',        label: '✅ Done' },
-    failed:     { cls: 'badge-failed',      label: '❌ Failed' },
-  };
-  const { cls, label } = map[status] || map.queued;
-  return <span className={`badge ${cls}`}>{label}</span>;
+const STAGE_ICONS = {
+  u_queued: '📥', p_queued: '⏳', processing: '⚡', done: '✅', failed: '❌',
+};
+
+const StatusBadge = ({ photo }) => {
+  const stage = photoStage(photo);
+  return (
+    <span className={`badge ${stage.cls}`} title={stage.title}>
+      {STAGE_ICONS[stage.key] || '⏳'} {stage.label}
+    </span>
+  );
 };
 
 export default function EventManager() {
@@ -386,7 +389,7 @@ export default function EventManager() {
                     <div className="text-sm font-medium" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{photo.filename}</div>
                     {photo.error_message && <div className="text-xs" style={{ color: 'var(--error)', marginTop: '2px' }}>{photo.error_message}</div>}
                   </div>
-                  <StatusBadge status={photo.status} />
+                  <StatusBadge photo={photo} />
                 </div>
               ))}
             </div>

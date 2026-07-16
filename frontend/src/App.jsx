@@ -3,6 +3,7 @@ import { AuthProvider } from './context/AuthContext';
 import { ProcessingProvider } from './context/ProcessingContext';
 import { ProtectedRoute } from './ProtectedRoute';
 import Navbar from './components/Navbar';
+import ErrorCenter from './components/ErrorCenter';
 
 import Landing           from './pages/Landing';
 import Login             from './pages/Login';
@@ -19,6 +20,7 @@ export default function App() {
       <AuthProvider>
         <ProcessingProvider>
           <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
+            <ErrorCenter />
             <Navbar />
             <Routes>
             {/* Public */}

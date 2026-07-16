@@ -35,6 +35,13 @@ const EMPTY_RESOURCES = {
   gpu_memory_used_mb: 0,
   gpu_memory_total_mb: 0,
   workers_online: 0,
+  autoscale_enabled: null,
+  processing_concurrency: null,
+  processing_concurrency_min: null,
+  processing_concurrency_max: null,
+  processing_control_reason: null,
+  drive_downloads_per_minute: null,
+  drive_rate_scope: null,
   stale: true,
   sampled_at: null,
 };
@@ -102,6 +109,23 @@ function unwrapMessage(message) {
   return message || {};
 }
 
+function optionalNumber(value) {
+  if (value == null || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function optionalBoolean(value) {
+  if (typeof value === 'boolean') return value;
+  if (value === 'true' || value === 1 || value === '1') return true;
+  if (value === 'false' || value === 0 || value === '0') return false;
+  return null;
+}
+
+function optionalText(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
 function normalizeResources(resources) {
   if (!resources || Object.keys(resources).length === 0) return {};
   const gpuPercent = resources.gpu_utilization_percent ?? resources.gpu_percent;
@@ -116,6 +140,13 @@ function normalizeResources(resources) {
     gpu_memory_used_mb: memoryUsedMb,
     gpu_memory_total_mb: memoryTotalMb,
     workers_online: resources.workers_online ?? resources.worker_count ?? 0,
+    autoscale_enabled: optionalBoolean(resources.autoscale_enabled),
+    processing_concurrency: optionalNumber(resources.processing_concurrency),
+    processing_concurrency_min: optionalNumber(resources.processing_concurrency_min),
+    processing_concurrency_max: optionalNumber(resources.processing_concurrency_max),
+    processing_control_reason: optionalText(resources.processing_control_reason),
+    drive_downloads_per_minute: optionalNumber(resources.drive_downloads_per_minute),
+    drive_rate_scope: optionalText(resources.drive_rate_scope),
   };
 }
 

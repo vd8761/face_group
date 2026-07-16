@@ -98,6 +98,30 @@ class Settings(BaseSettings):
     FACE_TILE_OVERLAP: float = 0.12
     FACE_DEDUP_IOU_THRESHOLD: float = 0.40
 
+    # Face worker capacity. Linux/Ubuntu uses a prefork pool that starts at one
+    # child and grows conservatively; Windows remains on Celery's solo pool.
+    # Each prefork child owns a separate Buffalo-L/CUDA model, so memory-derived
+    # limits are intentionally more important than the configured hard ceiling.
+    WORKER_AUTOSCALE_ENABLED: bool = True
+    WORKER_AUTOSCALE_MIN_CONCURRENCY: int = 1
+    WORKER_AUTOSCALE_MAX_CONCURRENCY: int = 4
+    # Fail closed when NVML/GPU discovery is unavailable. CPU-only deployments
+    # can opt into more processes explicitly after sizing host RAM.
+    WORKER_AUTOSCALE_CPU_MAX_CONCURRENCY: int = 1
+    WORKER_AUTOSCALE_GPU_DEVICE_INDEX: int = 0
+    WORKER_AUTOSCALE_GPU_MEMORY_PER_PROCESS_MB: int = 1800
+    WORKER_AUTOSCALE_GPU_MEMORY_RESERVE_MB: int = 1024
+    WORKER_AUTOSCALE_SYSTEM_MEMORY_PER_PROCESS_MB: int = 1800
+    WORKER_AUTOSCALE_SYSTEM_MEMORY_RESERVE_MB: int = 768
+    WORKER_AUTOSCALE_GPU_GROW_PERCENT: float = 72.0
+    WORKER_AUTOSCALE_CPU_GROW_PERCENT: float = 75.0
+    WORKER_AUTOSCALE_CPU_SHRINK_PERCENT: float = 92.0
+    WORKER_AUTOSCALE_SAMPLE_INTERVAL_SECONDS: float = 2.0
+    WORKER_AUTOSCALE_GROW_SAMPLES: int = 3
+    WORKER_AUTOSCALE_SCALE_UP_COOLDOWN_SECONDS: float = 15.0
+    WORKER_AUTOSCALE_IDLE_SECONDS: float = 20.0
+    WORKER_AUTOSCALE_SCALE_DOWN_COOLDOWN_SECONDS: float = 30.0
+
     # Hard usability and high-quality anchor gates are deliberately separate.
     # A 24-59px face can attach to a strong identity but cannot bridge clusters.
     FACE_HARD_DETECTION_THRESHOLD: float = 0.60
@@ -194,6 +218,39 @@ class Settings(BaseSettings):
             )
         if self.COSINE_MATCH_THRESHOLD > self.CLUSTER_MAX_DISTANCE_THRESHOLD:
             raise ValueError("COSINE_MATCH_THRESHOLD cannot exceed the complete-link gate")
+        positive_autoscale_fields = (
+            "WORKER_AUTOSCALE_MIN_CONCURRENCY",
+            "WORKER_AUTOSCALE_MAX_CONCURRENCY",
+            "WORKER_AUTOSCALE_CPU_MAX_CONCURRENCY",
+            "WORKER_AUTOSCALE_GPU_MEMORY_PER_PROCESS_MB",
+            "WORKER_AUTOSCALE_GPU_MEMORY_RESERVE_MB",
+            "WORKER_AUTOSCALE_SYSTEM_MEMORY_PER_PROCESS_MB",
+            "WORKER_AUTOSCALE_SYSTEM_MEMORY_RESERVE_MB",
+            "WORKER_AUTOSCALE_SAMPLE_INTERVAL_SECONDS",
+            "WORKER_AUTOSCALE_GROW_SAMPLES",
+            "WORKER_AUTOSCALE_SCALE_UP_COOLDOWN_SECONDS",
+            "WORKER_AUTOSCALE_IDLE_SECONDS",
+            "WORKER_AUTOSCALE_SCALE_DOWN_COOLDOWN_SECONDS",
+        )
+        for field_name in positive_autoscale_fields:
+            if float(getattr(self, field_name)) <= 0:
+                raise ValueError(f"{field_name} must be greater than zero")
+        if self.WORKER_AUTOSCALE_MIN_CONCURRENCY > self.WORKER_AUTOSCALE_MAX_CONCURRENCY:
+            raise ValueError(
+                "WORKER_AUTOSCALE_MIN_CONCURRENCY cannot exceed the maximum"
+            )
+        for field_name in (
+            "WORKER_AUTOSCALE_GPU_GROW_PERCENT",
+            "WORKER_AUTOSCALE_CPU_GROW_PERCENT",
+            "WORKER_AUTOSCALE_CPU_SHRINK_PERCENT",
+        ):
+            value = float(getattr(self, field_name))
+            if not 0.0 <= value <= 100.0:
+                raise ValueError(f"{field_name} must be between 0 and 100")
+        if self.WORKER_AUTOSCALE_CPU_GROW_PERCENT >= self.WORKER_AUTOSCALE_CPU_SHRINK_PERCENT:
+            raise ValueError(
+                "WORKER_AUTOSCALE_CPU_GROW_PERCENT must be below the shrink threshold"
+            )
         return self
 
 @lru_cache()

@@ -26,6 +26,26 @@ function knownProcessor(value) {
   return normalized && normalized !== 'unknown' && normalized !== 'pending' ? value : null;
 }
 
+function optionalNumber(value) {
+  if (value == null || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function slotCount(value) {
+  return Math.max(0, Math.round(value)).toLocaleString();
+}
+
+function driveScopeLabel(scope) {
+  const normalized = String(scope || '').trim().toLowerCase();
+  if (normalized === 'global' || normalized === 'globally') return 'globally paced';
+  if (normalized === 'worker' || normalized === 'per_worker') return 'paced per worker';
+  if (['organization', 'organisation', 'tenant', 'per_organization', 'per_tenant'].includes(normalized)) {
+    return 'paced per organization';
+  }
+  return normalized ? `${normalized.replaceAll('_', ' ')} pacing` : 'paced';
+}
+
 export default function ProcessingOverview({
   title = 'Live processing',
   subtitle,
@@ -64,6 +84,27 @@ export default function ProcessingOverview({
     || knownProcessor(summary.processor)
     || batchProcessor
     || 'pending';
+  const processingConcurrency = optionalNumber(resources.processing_concurrency);
+  const processingConcurrencyMin = optionalNumber(resources.processing_concurrency_min);
+  const processingConcurrencyMax = optionalNumber(resources.processing_concurrency_max)
+    ?? processingConcurrency;
+  const processingReason = typeof resources.processing_control_reason === 'string'
+    ? resources.processing_control_reason.trim()
+    : '';
+  const driveRate = optionalNumber(resources.drive_downloads_per_minute);
+  const hasProcessingControl = processingConcurrency !== null && processingConcurrencyMax !== null;
+  const hasDriveRate = driveRate !== null;
+  const processingMode = resources.autoscale_enabled === true
+    ? 'Adaptive processing'
+    : resources.autoscale_enabled === false
+      ? 'Fixed processing'
+      : 'Processing capacity';
+  const processingDetail = [
+    processingReason,
+    processingConcurrencyMin !== null
+      ? `minimum ${slotCount(processingConcurrencyMin)} slot${Math.round(processingConcurrencyMin) === 1 ? '' : 's'}`
+      : '',
+  ].filter(Boolean).join(' · ');
 
   return (
     <section className={`processing-overview ${compact ? 'compact' : ''}`} aria-live="polite">
@@ -120,6 +161,27 @@ export default function ProcessingOverview({
           tone="gpu"
         />
       </div>
+
+      {(hasProcessingControl || hasDriveRate) && (
+        <div className="processing-operational-status" aria-label="Processing controls">
+          {hasProcessingControl && (
+            <div className="processing-operational-chip" title={processingDetail || undefined}>
+              <Gauge size={13} />
+              <strong>
+                {processingMode} {slotCount(processingConcurrency)}/{slotCount(processingConcurrencyMax)} slots
+              </strong>
+              {processingDetail && <span>{processingDetail}</span>}
+            </div>
+          )}
+          {hasDriveRate && (
+            <div className="processing-operational-chip drive-rate">
+              <Images size={13} />
+              <strong>Drive downloads {slotCount(driveRate)}/min</strong>
+              <span>{driveScopeLabel(resources.drive_rate_scope)}</span>
+            </div>
+          )}
+        </div>
+      )}
 
       {showBatches && (
         <div className="processing-batches">
