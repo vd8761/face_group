@@ -94,6 +94,32 @@
 .resource-meter-progress.gpu::-moz-progress-bar { background: linear-gradient(90deg,#8b5cf6,#ec4899); }
 .resource-meter-detail { color: var(--text-muted); display: block; font-size: 0.64rem; margin-top: 0.3rem; }
 
+.processing-operational-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.processing-operational-chip {
+  align-items: center;
+  background: rgba(6,182,212,.08);
+  border: 1px solid rgba(6,182,212,.16);
+  border-radius: 999px;
+  color: #0e7490;
+  display: inline-flex;
+  font-size: 0.65rem;
+  gap: 0.35rem;
+  min-width: 0;
+  padding: 0.38rem 0.6rem;
+}
+
+.processing-operational-chip > svg { flex-shrink: 0; }
+.processing-operational-chip strong { color: var(--text-main); font-size: 0.68rem; white-space: nowrap; }
+.processing-operational-chip span { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.processing-operational-chip.drive-rate { background: rgba(124,58,237,.07); border-color: rgba(124,58,237,.15); color: #6d28d9; }
+.processing-overview.compact .processing-operational-chip span { display: none; }
+
 .processing-batches { display: grid; gap: 0.65rem; margin-top: 1rem; }
 .batch-progress-card { background: #fff; border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 0.8rem; }
 .batch-progress-card.compact { padding: 0.65rem; }
@@ -128,6 +154,7 @@
   .processing-overview-header { align-items: flex-start; }
   .processing-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .resource-grid { grid-template-columns: 1fr; }
+  .processing-operational-chip { max-width: 100%; }
   .batch-progress-heading { align-items: flex-start; }
   .batch-progress-device { align-items: flex-end; flex-direction: column; }
 }

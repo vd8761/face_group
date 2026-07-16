@@ -55,11 +55,27 @@ The API will be at `http://localhost:8000`.
 
 ### 4. Start the Celery worker (separate terminal)
 
+Linux / Ubuntu:
+
 ```bash
 cd backend
-python -m app.migrate
-celery -A app.workers.celery_app worker --loglevel=info --concurrency=1 --queues=face-v2,celery
+./worker-start.sh
 ```
+
+Windows PowerShell (activate `backend/.venv` first):
+
+```powershell
+cd backend
+.\worker-start.ps1
+```
+
+The managed launcher starts two Celery nodes. Face inference consumes
+`face-v2,celery`; Google Drive downloads consume `drive-downloads`, so network
+waits cannot occupy the GPU-facing worker. Ubuntu/Linux uses a conservative
+resource-aware prefork pool that begins at one child and grows one at a time.
+Windows uses two `solo` nodes at concurrency one because Celery cannot safely
+resize that pool. Each prefork child owns a separate InsightFace model; tune the
+`WORKER_AUTOSCALE_*` memory budgets only after GPU soak testing.
 
 ### 5. Frontend
 

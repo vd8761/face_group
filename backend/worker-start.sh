@@ -5,9 +5,7 @@ set -eu
 # deploy. Run the same advisory-locked idempotent expansion first.
 python -m app.migrate
 
-# Consume the v2 queue for new schema-aware work and the default queue to drain
-# tasks published by the previous release.
-exec celery -A app.workers.celery_app worker \
-  --loglevel=info \
-  --concurrency=1 \
-  --queues=face-v2,celery
+# The supervisor owns two nodes: an adaptive POSIX face pool and an isolated
+# single-slot Drive downloader. It forwards termination and stops both nodes if
+# either one exits.
+exec python -m app.workers.supervisor

@@ -21,6 +21,10 @@ ssl_conf = {"ssl_cert_reqs": ssl.CERT_NONE} if settings.REDIS_URL and settings.R
 celery_app.conf.update(
     broker_use_ssl=ssl_conf,
     redis_backend_use_ssl=ssl_conf,
+    # The durable dispatcher publishes to this queue explicitly. Making it the
+    # default means a bare `celery worker` (no -Q flag) still consumes it and
+    # unrouted legacy publishes land where workers are listening.
+    task_default_queue="face-v2",
     broker_connection_timeout=3.0,
     broker_connection_retry=True,
     broker_connection_retry_on_startup=True,
@@ -32,9 +36,12 @@ celery_app.conf.update(
     enable_utc=True,
     task_track_started=True,
     task_acks_late=True,
-    # The local 4 GB GPU can safely hold one Buffalo-L worker at a time.
+    # The launcher supplies --autoscale on POSIX after resolving CPU/GPU/RAM
+    # capacity. Windows uses solo=1. Keeping these defaults at one is the safe
+    # fallback for ad-hoc worker commands that bypass the managed launcher.
     worker_prefetch_multiplier=1,
     worker_concurrency=1,
+    worker_autoscaler="app.workers.resource_autoscaler:ResourceAwareAutoscaler",
     # Large originals can need several tiled CPU passes. Keep a hard guard
     # without failing healthy 100 MB photos on slower workers.
     task_time_limit=900,
@@ -45,6 +52,10 @@ celery_app.conf.update(
     # Rate limit raised for Pro instance (was 30/m = glacially slow for 4K photos)
     task_annotations={
         "app.workers.tasks.process_photo": {"rate_limit": "120/m"},
+        # Google soft-bans the server IP ("Sorry..." page, HTTP 403) when
+        # hundreds of key-authenticated downloads arrive in a burst. Pace
+        # Drive imports so large folders trickle in instead of tripping it.
+        "app.workers.tasks.import_drive_item": {"rate_limit": "20/m"},
     },
     # Result expiry
     result_expires=3600,

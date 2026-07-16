@@ -32,6 +32,7 @@ from .event_lock import lock_event_face_mutation
 
 logger = logging.getLogger(__name__)
 DISPATCH_QUEUE = "face-v2"
+DRIVE_DOWNLOAD_QUEUE = "drive-downloads"
 DISPATCH_CLAIM_TIMEOUT_SECONDS = 60
 PUBLISHED_TASK_RECHECK_SECONDS = 24 * 60 * 60
 PROCESSING_LEASE_SECONDS = 17 * 60
@@ -152,7 +153,7 @@ async def _publish(record: DispatchRecord) -> bool:
             result = await asyncio.to_thread(
                 import_drive_item.apply_async,
                 args=[str(record.item_id)],
-                queue=DISPATCH_QUEUE,
+                queue=DRIVE_DOWNLOAD_QUEUE,
             )
         else:
             result = await asyncio.to_thread(
