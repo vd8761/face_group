@@ -157,10 +157,7 @@ export default function Login() {
         position: 'relative'
       }}>
         
-        {/* Mobile Logo */}
-        <div className="mobile-logo-container" style={{ display: 'none', marginBottom: '2rem' }}>
-          <Logo />
-        </div>
+
 
         <motion.div
           initial={{ opacity: 0, x: 20 }}
@@ -320,10 +317,6 @@ export default function Login() {
         @media (max-width: 900px) {
           .login-visual-panel {
             display: none !important;
-          }
-          .mobile-logo-container {
-            display: block !important;
-            text-align: center;
           }
         }
       `}</style>

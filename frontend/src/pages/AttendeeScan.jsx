@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Camera, Loader2, AlertCircle, User, Key, Phone,
-  CheckCircle2, ChevronRight, Shield, Sparkles, ArrowRight
+  CheckCircle2, ChevronRight, Shield, Sparkles, ArrowRight, Download
 } from 'lucide-react';
 import FaceScanner from '../components/FaceScanner';
 import api from '../api/client';
@@ -165,6 +165,9 @@ export default function AttendeeScan() {
                   }}>
                     <Sparkles size={32} color="#fff" />
                   </div>
+                  {form.full_name && (
+                    <h3 style={{ fontSize: '1.2rem', color: 'var(--text-muted)', marginBottom: '0.25rem', fontWeight: 600 }}>Hi {form.full_name},</h3>
+                  )}
                   <h2 style={{ fontSize: '1.75rem', marginBottom: '0.5rem' }}>🎉 Found your photos!</h2>
                   <p className="text-secondary">We found <strong>{results.photo_count} photo{results.photo_count !== 1 ? 's' : ''}</strong> of you at <strong>{results.event_name}</strong></p>
                 </>
@@ -178,6 +181,9 @@ export default function AttendeeScan() {
                   }}>
                     <Camera size={32} color="#fff" />
                   </div>
+                  {form.full_name && (
+                    <h3 style={{ fontSize: '1.2rem', color: 'var(--text-muted)', marginBottom: '0.25rem', fontWeight: 600 }}>Hi {form.full_name},</h3>
+                  )}
                   <h2 style={{ fontSize: '1.75rem', marginBottom: '0.5rem' }}>No match found</h2>
                   <p className="text-secondary">We couldn't find photos of you in <strong>{results.event_name}</strong>. Photos may still be processing.</p>
                 </>
@@ -185,30 +191,50 @@ export default function AttendeeScan() {
             </div>
 
             {results.photos && results.photos.length > 0 && (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '0.75rem' }}>
-                {results.photos.map((photo, i) => (
-                  <a key={photo.id} href={photo.download_url} target="_blank" rel="noreferrer"
-                    style={{ display: 'block', aspectRatio: '1', borderRadius: '12px', overflow: 'hidden', position: 'relative', boxShadow: '0 2px 12px rgba(0,0,0,0.15)' }}
-                  >
-                    <img src={photo.thumbnail_url} alt={`Photo ${i + 1}`} style={{ width: '100%', height: '100%', objectFit: 'cover', transition: 'transform 0.2s' }}
-                      onMouseEnter={e => e.target.style.transform = 'scale(1.05)'}
-                      onMouseLeave={e => e.target.style.transform = 'scale(1)'}
-                    />
-                    <div style={{
-                      position: 'absolute', bottom: 0, left: 0, right: 0,
-                      background: 'linear-gradient(to top, rgba(0,0,0,0.7) 0%, transparent 100%)',
-                      padding: '1.5rem 0.5rem 0.4rem', color: '#fff', fontSize: '0.7rem', opacity: 0,
-                      transition: 'opacity 0.2s',
-                    }} onMouseEnter={e => e.currentTarget.style.opacity = 1} onMouseLeave={e => e.currentTarget.style.opacity = 0}>
-                      Tap to download ↓
+              <>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '0.75rem', marginBottom: '2rem' }}>
+                  {results.photos.map((photo, i) => (
+                    <div key={photo.id} style={{ position: 'relative' }}>
+                      <div style={{ display: 'block', aspectRatio: '1', borderRadius: '12px', overflow: 'hidden', position: 'relative', boxShadow: '0 2px 12px rgba(0,0,0,0.15)' }}>
+                        <img src={photo.thumbnail_url} alt={`Photo ${i + 1}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      </div>
+                      <a href={photo.download_url} target="_blank" rel="noreferrer" 
+                         style={{
+                           position: 'absolute', bottom: '8px', right: '8px', 
+                           background: 'rgba(255,255,255,0.95)', color: 'var(--teal)', 
+                           padding: '0.5rem', borderRadius: '50%', boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
+                           display: 'flex', alignItems: 'center', justifyContent: 'center'
+                         }}
+                         title="Download Photo"
+                      >
+                        <Download size={18} />
+                      </a>
                     </div>
-                  </a>
-                ))}
-              </div>
+                  ))}
+                </div>
+                
+                <div className="flex gap-3" style={{ justifyContent: 'center', marginBottom: '1.5rem', flexDirection: 'column', alignItems: 'center' }}>
+                  <button className="btn" style={{ background: 'var(--teal)', color: '#fff', width: '100%', maxWidth: 300 }} onClick={async () => {
+                    for (const photo of results.photos) {
+                      const a = document.createElement('a');
+                      a.href = photo.download_url;
+                      a.target = '_blank';
+                      a.rel = 'noreferrer';
+                      document.body.appendChild(a);
+                      a.click();
+                      document.body.removeChild(a);
+                      await new Promise(r => setTimeout(r, 500));
+                    }
+                  }}>
+                    <Download size={18} style={{ marginRight: 6 }} />
+                    Download All ({results.photo_count} photos)
+                  </button>
+                </div>
+              </>
             )}
 
             <div className="flex gap-3 mt-6" style={{ justifyContent: 'center' }}>
-              <button className="btn btn-outline" onClick={() => { setResults(null); setStep('join'); setForm({ access_code: '', full_name: '', mobile: '' }); }}>
+              <button className="btn btn-outline" style={{ width: '100%', maxWidth: 300 }} onClick={() => { setResults(null); setStep('join'); setForm({ access_code: '', full_name: '', mobile: '' }); }}>
                 Scan Again
               </button>
             </div>

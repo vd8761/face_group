@@ -43,8 +43,9 @@ export default function Navbar() {
               className="btn btn-ghost btn-sm"
               style={{ color: 'var(--teal-dark)', fontWeight: 600 }}
             >
-              <Scan size={14} />
+              <Scan size={14} className="hide-on-mobile" />
               <span className="hide-on-mobile">Find My Photos</span>
+              <span style={{ display: 'none' }} className="mobile-only-inline">Find Photos</span>
             </button>
           </Link>
         )}
@@ -105,23 +106,25 @@ export default function Navbar() {
           </>
         ) : (
           /* Primary CTA */
-          <Link to="/login">
-            <button
-              className="btn btn-sm"
-              style={{
-                background: scrolled && isPublicPage ? 'var(--teal)' : 'transparent',
-                color: scrolled && isPublicPage ? '#fff' : 'var(--navy)',
-                border: scrolled && isPublicPage ? '1.5px solid var(--teal)' : '1.5px solid var(--border)',
-                borderRadius: 'var(--r-md)',
-                fontWeight: 700,
-                transition: 'all 0.25s ease',
-                boxShadow: scrolled && isPublicPage ? 'var(--shadow-glow)' : 'none',
-              }}
-            >
-              <span className="hide-on-mobile">Organizer Sign In</span>
-              <span style={{ display: 'none' }} className="mobile-only-inline">Sign In</span>
-            </button>
-          </Link>
+          location.pathname !== '/login' && (
+            <Link to="/login">
+              <button
+                className="btn btn-sm"
+                style={{
+                  background: scrolled && isPublicPage ? 'var(--teal)' : 'transparent',
+                  color: scrolled && isPublicPage ? '#fff' : 'var(--navy)',
+                  border: scrolled && isPublicPage ? '1.5px solid var(--teal)' : '1.5px solid var(--border)',
+                  borderRadius: 'var(--r-md)',
+                  fontWeight: 700,
+                  transition: 'all 0.25s ease',
+                  boxShadow: scrolled && isPublicPage ? 'var(--shadow-glow)' : 'none',
+                }}
+              >
+                <span className="hide-on-mobile">Organizer Sign In</span>
+                <span style={{ display: 'none' }} className="mobile-only-inline">Sign In</span>
+              </button>
+            </Link>
+          )
         )}
       </div>
     </nav>
