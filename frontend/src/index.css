@@ -568,7 +568,19 @@ textarea.input { height: auto; padding: 0.75rem 0.875rem; resize: vertical; }
 
 /* ─── Responsive ─────────────────────────────────────────────────────────── */
 @media (max-width: 768px) {
-  .navbar { padding: 0 1rem; }
+  .navbar { 
+    padding: 0 1rem; 
+    height: auto;
+    min-height: 68px;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    padding-top: 0.5rem;
+    padding-bottom: 0.5rem;
+  }
+  .navbar-actions { gap: 0.5rem; justify-content: flex-end; }
+  .hide-on-mobile { display: none !important; }
+  .mobile-only-inline { display: inline !important; }
+  
   .container { padding: 0 1rem; }
   .section { padding: 3.5rem 1rem; }
   .section-lg { padding: 4rem 1rem; }
