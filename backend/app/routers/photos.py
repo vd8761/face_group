@@ -568,7 +568,7 @@ async def import_from_drive(
     drive_files = []
     page_token = None
 
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=120) as client:  # 2 min — large folders need multiple pages
         while True:
             params = {
                 "q": f"'{folder_id}' in parents and trashed = false and (mimeType contains 'image/')",

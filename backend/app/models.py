@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Optional, List
 
 from sqlalchemy import (
-    String, Text, Integer, Float, Boolean, DateTime, ForeignKey,
+    String, Text, Integer, BigInteger, Float, Boolean, DateTime, ForeignKey,
     LargeBinary, JSON, Enum as SAEnum, func, Index, CheckConstraint,
     UniqueConstraint,
 )
@@ -120,7 +120,7 @@ class Subscription(Base):
     max_events_per_month: Mapped[int] = mapped_column(Integer, default=1)
     max_photos_per_event: Mapped[int] = mapped_column(Integer, default=1000)
     max_storage_gb: Mapped[float]     = mapped_column(Float, default=5.0)
-    current_storage_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    current_storage_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
     created_at: Mapped[datetime]  = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime]  = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
