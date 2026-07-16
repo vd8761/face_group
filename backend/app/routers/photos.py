@@ -7,16 +7,21 @@ import asyncio
 import os
 import io
 import gc
-from typing import List
+import time
+from typing import Dict, List, Literal, Optional
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status, BackgroundTasks, Query
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import delete, func, select, update
 
 from ..database import get_db, async_session_maker
-from ..models import Photo, PhotoStatus, Event, Subscription, User, AuditLog, FaceDetection, FaceCluster
+from ..models import (
+    Photo, PhotoStatus, Event, Subscription, User, AuditLog, FaceDetection,
+    FaceCluster, BatchItemStatus, BatchSource, BatchStatus, ProcessingBatch,
+    ProcessingBatchItem,
+)
 from ..auth import require_organizer, require_attendee, get_current_user
 from ..services.storage import (
     upload_original, upload_thumbnail, upload_face_crop,
@@ -24,11 +29,43 @@ from ..services.storage import (
 )
 from ..services.ml_pipeline import detect_and_embed, embedding_to_bytes
 from ..services.clustering import assign_to_cluster, create_new_cluster
-from ..schemas import PhotoResponse, PhotoListResponse, MessageResponse
+from ..schemas import (
+    PhotoResponse, PhotoListResponse, MessageResponse,
+    ProcessingBatchCreateRequest, ProcessingBatchResponse,
+)
+from ..services.batch_tracking import (
+    BatchStateError, append_item, append_photo_items, create_batch, mark_item_started,
+    mark_item_terminal, seal_batch, TERMINAL_ITEM_STATUSES,
+)
+from ..services.telemetry import (
+    detect_runtime_processor, record_completion_sync, set_local_processor,
+)
+from ..services.event_lock import lock_event_face_mutation
 from ..config import get_settings
 
 settings = get_settings()
 router = APIRouter(prefix="/photos", tags=["Photos"])
+
+
+def _pipeline_version() -> str:
+    try:
+        from ..services.ml_pipeline import get_pipeline_version
+
+        return str(get_pipeline_version())[:100]
+    except (ImportError, AttributeError):
+        return f"insightface:{settings.INSIGHTFACE_MODEL}:v1"[:100]
+
+
+async def _schedule_recluster_if_idle(event_id: uuid.UUID) -> None:
+    # Finalization is claimed durably in PostgreSQL before it is published.
+    # The recovery loop retries a broker outage without starting heavyweight
+    # clustering inside the web process or enqueueing duplicate event jobs.
+    from ..services.dispatcher import dispatch_ready_finalizers
+
+    try:
+        await dispatch_ready_finalizers()
+    except Exception as exc:
+        print(f"Could not schedule event recluster for {event_id}: {exc}")
 
 
 async def _get_event_or_404(event_id: uuid.UUID, tenant_id: uuid.UUID, db: AsyncSession) -> Event:
@@ -67,8 +104,10 @@ async def _process_photos_background(
                 # Free the raw image bytes immediately — they can be 50-100 MB for RAW files
                 del data_bytes
                 gc.collect()
+                await lock_event_face_mutation(event_id, db)
 
-                for face in detected_faces:
+                pipeline_version = _pipeline_version()
+                for face_index, face in enumerate(detected_faces):
                     detection = FaceDetection(
                         photo_id=photo_uuid,
                         bbox={"x1": face.bbox[0], "y1": face.bbox[1],
@@ -76,6 +115,8 @@ async def _process_photos_background(
                         detection_confidence=face.confidence,
                         quality_score=face.quality_score,
                         embedding=embedding_to_bytes(face.embedding),
+                        pipeline_version=pipeline_version,
+                        face_index=face_index,
                         is_low_quality=face.is_low_quality,
                     )
                     db.add(detection)
@@ -124,11 +165,96 @@ async def _process_photos_background(
 # ─────────────────────────────────────────────────────────────────────────────
 MAX_FILES_PER_REQUEST = 200  # Server-side batch cap — frontend may chunk larger uploads
 
+
+async def _dispatch_batch_items(
+    *,
+    items: List[tuple[str, str]],
+    event: Event,
+    background_tasks: BackgroundTasks,
+) -> None:
+    """Publish durable items; the recovery loop retries any broker outage."""
+    if not items:
+        return
+    del event, background_tasks  # Scope is derived from the durable DB rows.
+    from ..services.dispatcher import dispatch_item_ids
+
+    await dispatch_item_ids(item_id for _photo_id, item_id in items)
+
+
+@router.post(
+    "/events/{event_id}/batches",
+    response_model=ProcessingBatchResponse,
+    status_code=201,
+)
+async def create_upload_batch(
+    event_id: uuid.UUID,
+    body: Optional[ProcessingBatchCreateRequest] = None,
+    current_user: User = Depends(require_organizer),
+    db: AsyncSession = Depends(get_db),
+):
+    event = await _get_event_or_404(event_id, current_user.tenant_id, db)
+    source = body.source if body else BatchSource.upload
+    if source in (BatchSource.drive_import, BatchSource.reprocess):
+        raise HTTPException(
+            status_code=422,
+            detail=f"{source.value} batches are created by their dedicated endpoint",
+        )
+    batch = await create_batch(
+        db,
+        tenant_id=event.tenant_id,
+        event_id=event.id,
+        created_by_user_id=current_user.id,
+        source=source,
+        expected_images=body.expected_images if body else None,
+    )
+    return ProcessingBatchResponse.model_validate(batch)
+
+
+@router.post(
+    "/batches/{batch_id}/seal",
+    response_model=ProcessingBatchResponse,
+)
+async def seal_upload_batch(
+    batch_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(require_organizer),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        batch = await seal_batch(
+            db,
+            batch_id=batch_id,
+            tenant_id=current_user.tenant_id,
+        )
+    except BatchStateError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    event = await _get_event_or_404(batch.event_id, current_user.tenant_id, db)
+    dispatch_rows = (await db.execute(
+        select(ProcessingBatchItem.photo_id, ProcessingBatchItem.id).where(
+            ProcessingBatchItem.batch_id == batch.id,
+            ProcessingBatchItem.status == BatchItemStatus.queued,
+            ProcessingBatchItem.photo_id.is_not(None),
+        )
+    )).all()
+    await db.commit()
+    # Reload server-managed timestamps before response serialization.
+    await db.refresh(batch)
+    await _dispatch_batch_items(
+        items=[(str(photo_id), str(item_id)) for photo_id, item_id in dispatch_rows],
+        event=event,
+        background_tasks=background_tasks,
+    )
+    if batch.status == BatchStatus.finalizing:
+        await _schedule_recluster_if_idle(event.id)
+    return ProcessingBatchResponse.model_validate(batch)
+
 @router.post("/events/{event_id}/upload", status_code=202)
 async def upload_photos(
     event_id: uuid.UUID,
     background_tasks: BackgroundTasks,
     files: List[UploadFile] = File(...),
+    batch_id: Optional[uuid.UUID] = Form(None),
     current_user: User = Depends(require_organizer),
     db: AsyncSession = Depends(get_db),
 ):
@@ -144,8 +270,6 @@ async def upload_photos(
     Face detection runs via Celery if available, falling back to BackgroundTasks.
     """
     import os as _os
-    from ..workers.tasks import process_photo as _process_photo_task
-
     if len(files) > MAX_FILES_PER_REQUEST:
         raise HTTPException(
             status_code=422,
@@ -154,6 +278,28 @@ async def upload_photos(
         )
 
     event = await _get_event_or_404(event_id, current_user.tenant_id, db)
+    explicit_batch = batch_id is not None
+    if explicit_batch:
+        batch_result = await db.execute(
+            select(ProcessingBatch).where(
+                ProcessingBatch.id == batch_id,
+                ProcessingBatch.tenant_id == current_user.tenant_id,
+                ProcessingBatch.event_id == event_id,
+            )
+        )
+        processing_batch = batch_result.scalar_one_or_none()
+        if not processing_batch:
+            raise HTTPException(status_code=404, detail="Processing batch not found")
+        if processing_batch.status != BatchStatus.receiving:
+            raise HTTPException(status_code=409, detail="Processing batch is already sealed")
+    else:
+        processing_batch = await create_batch(
+            db,
+            tenant_id=current_user.tenant_id,
+            event_id=event_id,
+            created_by_user_id=current_user.id,
+            source=BatchSource.upload,
+        )
 
     # Subscription photo-count guard
     sub_result = await db.execute(
@@ -172,7 +318,7 @@ async def upload_photos(
         )
 
     created_ids  = []
-    fallback_ids = []
+    created_items: List[tuple[str, str]] = []
     total_bytes  = 0
     duplicates   = []
     skipped_fmt  = []
@@ -187,12 +333,36 @@ async def upload_photos(
             # Extension whitelist (MIME types unreliable for RAW/TIFF)
             if ext not in settings.ALLOWED_IMAGE_EXTENSIONS:
                 skipped_fmt.append(fname)
+                skipped_item = await append_item(
+                    db,
+                    batch_id=processing_batch.id,
+                    photo_id=None,
+                    filename=fname or None,
+                )
+                await mark_item_terminal(
+                    db,
+                    item_id=skipped_item.id,
+                    status=BatchItemStatus.skipped,
+                    error_message="Unsupported image format",
+                )
                 continue
     
             data = await file.read()
     
             if len(data) > settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024:
                 skipped_fmt.append(fname)
+                skipped_item = await append_item(
+                    db,
+                    batch_id=processing_batch.id,
+                    photo_id=None,
+                    filename=fname or None,
+                )
+                await mark_item_terminal(
+                    db,
+                    item_id=skipped_item.id,
+                    status=BatchItemStatus.skipped,
+                    error_message="Image exceeds the upload size limit",
+                )
                 del data
                 continue
     
@@ -206,6 +376,19 @@ async def upload_photos(
             )
             if existing.scalar_one_or_none():
                 duplicates.append(fname)
+                skipped_item = await append_item(
+                    db,
+                    batch_id=processing_batch.id,
+                    photo_id=None,
+                    filename=fname or None,
+                    source_ref=content_hash,
+                )
+                await mark_item_terminal(
+                    db,
+                    item_id=skipped_item.id,
+                    status=BatchItemStatus.skipped,
+                    error_message="Duplicate photo",
+                )
                 del data
                 continue
     
@@ -224,7 +407,8 @@ async def upload_photos(
             # ── Free image bytes IMMEDIATELY after R2 upload ──────────────────────
             # This is the critical fix: we do NOT buffer data in a list.
             # Each file's bytes are freed before moving to the next file.
-            total_bytes += len(data)
+            file_size = len(data)
+            total_bytes += file_size
             del data
             gc.collect()
     
@@ -235,7 +419,7 @@ async def upload_photos(
                 tenant_id=current_user.tenant_id,
                 original_key=original_key,
                 thumbnail_key=thumbnail_key,
-                original_size_bytes=0,   # bytes already freed
+                original_size_bytes=file_size,
                 filename=fname or f"{photo_id}{ext}",
                 mime_type=mime,
                 content_hash=content_hash,
@@ -243,20 +427,24 @@ async def upload_photos(
             )
             db.add(photo)
             await db.flush()   # get photo.id assigned before Celery dispatch
+
+            item = await append_item(
+                db,
+                batch_id=processing_batch.id,
+                photo_id=photo.id,
+                filename=photo.filename,
+            )
     
             # ── Dispatch to Celery ─────────
-            _process_photo_task.delay(
-                str(photo_id),
-                str(current_user.tenant_id),
-                str(event_id),
-            )
             created_ids.append(str(photo_id))
+            created_items.append((str(photo_id), str(item.id)))
 
     except Exception as e:
         import traceback
         err_msg = str(e)
         tb = traceback.format_exc()
-        raise HTTPException(status_code=500, detail={"error": err_msg, "traceback": tb})
+        print(tb)
+        raise HTTPException(status_code=500, detail=f"Upload failed: {err_msg}")
 
     if sub and total_bytes:
         sub.current_storage_bytes = (sub.current_storage_bytes or 0) + total_bytes
@@ -267,17 +455,40 @@ async def upload_photos(
         action="photo.upload",
         resource_type="event",
         resource_id=str(event_id),
-        payload={"count": len(created_ids)},
+        payload={"count": len(created_ids), "batch_id": str(processing_batch.id)},
     ))
 
-    await db.commit()
-    
-    if fallback_ids:
-        background_tasks.add_task(
-            _reprocess_failed_background,
-            photo_ids=fallback_ids,
-            event=event,
+    if not explicit_batch:
+        processing_batch = await seal_batch(
+            db,
+            batch_id=processing_batch.id,
+            tenant_id=current_user.tenant_id,
+            event_id=event_id,
         )
+    elif processing_batch.expected_images is not None:
+        # Auto-seal a fully-accounted batch server-side. The explicit /seal
+        # request remains an idempotent recovery path for interrupted uploads.
+        await db.refresh(processing_batch)
+        if processing_batch.total_images >= processing_batch.expected_images:
+            processing_batch = await seal_batch(
+                db,
+                batch_id=processing_batch.id,
+                tenant_id=current_user.tenant_id,
+                event_id=event_id,
+            )
+
+    await db.commit()
+
+    # Explicit batches remain appendable until seal, but every committed page
+    # is dispatched immediately.  Seal re-dispatches any queued rows as an
+    # idempotent recovery path if a broker call or client page-close was lost.
+    await _dispatch_batch_items(
+        items=created_items,
+        event=event,
+        background_tasks=background_tasks,
+    )
+    if processing_batch.status == BatchStatus.finalizing:
+        await _schedule_recluster_if_idle(event.id)
 
     return {
         "accepted":        len(created_ids),
@@ -285,6 +496,8 @@ async def upload_photos(
         "duplicates":      len(duplicates),
         "duplicate_names": duplicates,
         "photo_ids":       created_ids,
+        "batch_id":        str(processing_batch.id),
+        "batch_status":    processing_batch.status.value,
     }
 
 
@@ -309,6 +522,7 @@ def _parse_drive_folder_id(url: str) -> str:
 async def import_from_drive(
     event_id: uuid.UUID,
     body: dict,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_organizer),
     db: AsyncSession = Depends(get_db),
 ):
@@ -335,7 +549,7 @@ async def import_from_drive(
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
-    await _get_event_or_404(event_id, current_user.tenant_id, db)
+    event = await _get_event_or_404(event_id, current_user.tenant_id, db)
 
     # ── List all image files in the folder via Drive API v3 ──────────────────
     import httpx
@@ -395,7 +609,15 @@ async def import_from_drive(
         )
 
     # ── Create placeholder DB rows immediately (status=queued) ────────────────
-    queued_items = []   # [(photo_id, file_id, filename, mime_type)]
+    await lock_event_face_mutation(event_id, db)
+    processing_batch = await create_batch(
+        db,
+        tenant_id=current_user.tenant_id,
+        event_id=event_id,
+        created_by_user_id=current_user.id,
+        source=BatchSource.drive_import,
+    )
+    queued_items = []   # [(photo_id, batch_item_id, file_id, filename, mime_type)]
     for f in drive_files:
         photo_id = uuid.uuid4()
         photo = Photo(
@@ -411,7 +633,17 @@ async def import_from_drive(
             status=PhotoStatus.queued,
         )
         db.add(photo)
-        queued_items.append((str(photo_id), f["id"], f["name"], f["mimeType"]))
+        await db.flush()
+        item = await append_item(
+            db,
+            batch_id=processing_batch.id,
+            photo_id=photo.id,
+            filename=f["name"],
+            source_ref=f["id"],
+        )
+        queued_items.append((
+            str(photo_id), str(item.id), f["id"], f["name"], f["mimeType"]
+        ))
 
     db.add(AuditLog(
         user_id=current_user.id,
@@ -419,24 +651,34 @@ async def import_from_drive(
         action="photo.drive_import",
         resource_type="event",
         resource_id=str(event_id),
-        payload={"folder_id": folder_id, "count": len(queued_items)},
+        payload={
+            "folder_id": folder_id,
+            "count": len(queued_items),
+            "batch_id": str(processing_batch.id),
+        },
     ))
+    processing_batch = await seal_batch(
+        db,
+        batch_id=processing_batch.id,
+        tenant_id=current_user.tenant_id,
+        event_id=event_id,
+    )
     await db.commit()
 
-    # ── Fire-and-forget async task: download → R2 → Celery dispatch ──────────
-    asyncio.create_task(
-        _process_drive_import(
-            queued_items=queued_items,
-            api_key=api_key,
-            event_id=event_id,
-            tenant_id=current_user.tenant_id,
-        )
+    # Drive download itself is now a durable worker stage. A web restart after
+    # this commit is recovered from the batch-item outbox.
+    await _dispatch_batch_items(
+        items=[(photo_id, item_id) for photo_id, item_id, *_rest in queued_items],
+        event=event,
+        background_tasks=background_tasks,
     )
 
     return {
         "queued": len(queued_items),
         "message": f"Importing {len(queued_items)} photos from Google Drive in the background.",
         "files": [f["name"] for f in drive_files[:10]],  # preview of first 10
+        "batch_id": str(processing_batch.id),
+        "batch_status": processing_batch.status.value,
     }
 
 
@@ -455,8 +697,9 @@ async def _process_drive_import(
     """
 
     async with httpx.AsyncClient(timeout=120) as client:
-        for photo_id_str, file_id, filename, mime_type in queued_items:
+        for photo_id_str, batch_item_id_str, file_id, filename, mime_type in queued_items:
             photo_uuid = uuid.UUID(photo_id_str)
+            batch_item_uuid = uuid.UUID(batch_item_id_str)
 
             async with async_session_maker() as db:
                 try:
@@ -494,6 +737,12 @@ async def _process_drive_import(
                         )
                     )
                     if existing.scalar_one_or_none():
+                        await mark_item_terminal(
+                            db,
+                            item_id=batch_item_uuid,
+                            status=BatchItemStatus.skipped,
+                            error_message="Duplicate image",
+                        )
                         # Duplicate — delete placeholder row
                         res = await db.execute(select(Photo).where(Photo.id == photo_uuid))
                         p = res.scalar_one_or_none()
@@ -517,16 +766,16 @@ async def _process_drive_import(
                     photo_obj.thumbnail_key = thumbnail_key
                     photo_obj.original_size_bytes = len(data)
                     photo_obj.content_hash = content_hash
-                    photo_obj.status = PhotoStatus.processing
+                    photo_obj.status = PhotoStatus.queued
                     await db.commit()
 
                     # 5. Face detection + clustering
                     # Dispatch to Celery instead of processing locally
                     from ..workers.tasks import process_photo
-                    process_photo.delay(
-                        str(photo_uuid),
-                        str(tenant_id),
-                        str(event_id)
+                    await run_in_threadpool(
+                        process_photo.apply_async,
+                        args=[str(photo_uuid), str(tenant_id), str(event_id)],
+                        kwargs={"batch_item_id": str(batch_item_uuid)},
                     )
                 except Exception as e:
                     await db.rollback()
@@ -536,7 +785,19 @@ async def _process_drive_import(
                         if photo_obj:
                             photo_obj.status = PhotoStatus.failed
                             photo_obj.error_message = str(e)[:500]
-                            await db.commit()
+                        transition = await mark_item_terminal(
+                            db,
+                            item_id=batch_item_uuid,
+                            status=BatchItemStatus.failed,
+                            error_message=str(e),
+                        )
+                        await db.commit()
+                        if transition.applied:
+                            record_completion_sync(
+                                batch_id=transition.batch_id,
+                                tenant_id=transition.tenant_id,
+                                faces_detected=0,
+                            )
                     except Exception:
                         pass
 
@@ -544,31 +805,49 @@ async def _process_drive_import(
 # ─────────────────────────────────────────────────────────────────────────────
 # List photos
 # ─────────────────────────────────────────────────────────────────────────────
+    await _schedule_recluster_if_idle(event_id)
+
+
 @router.get("/events/{event_id}", response_model=PhotoListResponse)
 async def list_event_photos(
     event_id: uuid.UUID,
     current_user: User = Depends(require_organizer),
     db: AsyncSession = Depends(get_db),
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=200),
+    status_filter: Literal["all", "queued", "processing", "done", "failed"] = "all",
+    q: Optional[str] = Query(default=None, max_length=120),
 ):
     await _get_event_or_404(event_id, current_user.tenant_id, db)
 
+    filters = [Photo.event_id == event_id]
+    if status_filter != "all":
+        filters.append(Photo.status == PhotoStatus(status_filter))
+    if q and q.strip():
+        filters.append(Photo.filename.ilike(f"%{q.strip()}%"))
+
     total = (await db.execute(
-        select(func.count(Photo.id)).where(Photo.event_id == event_id)
+        select(func.count(Photo.id)).where(*filters)
     )).scalar()
 
+    face_counts = (
+        select(FaceDetection.photo_id, func.count(FaceDetection.id).label("face_count"))
+        .group_by(FaceDetection.photo_id)
+        .subquery()
+    )
     result = await db.execute(
-        select(Photo)
-        .where(Photo.event_id == event_id)
+        select(Photo, func.coalesce(face_counts.c.face_count, 0))
+        .outerjoin(face_counts, face_counts.c.photo_id == Photo.id)
+        .where(*filters)
         .order_by(Photo.uploaded_at.desc())
         .offset(skip).limit(limit)
     )
-    photos = result.scalars().all()
+    rows = result.all()
 
     out = []
-    for p in photos:
+    for p, face_count in rows:
         thumb_url = generate_presigned_url(p.thumbnail_key, expires_in=3600) if p.thumbnail_key else None
+        preview_url = generate_presigned_url(p.original_key, expires_in=1800) if p.original_key else thumb_url
         out.append(PhotoResponse(
             id=p.id,
             filename=p.filename,
@@ -576,9 +855,192 @@ async def list_event_photos(
             error_message=p.error_message,
             uploaded_at=p.uploaded_at,
             thumbnail_url=thumb_url,
+            preview_url=preview_url,
+            original_size_bytes=p.original_size_bytes or 0,
+            face_count=int(face_count or 0),
         ))
 
     return PhotoListResponse(photos=out, total=total)
+
+
+async def _get_photo_for_organizer(
+    photo_id: uuid.UUID,
+    current_user: User,
+    db: AsyncSession,
+) -> Photo:
+    photo = (await db.execute(
+        select(Photo).where(
+            Photo.id == photo_id,
+            Photo.tenant_id == current_user.tenant_id,
+        )
+    )).scalar_one_or_none()
+    if not photo:
+        raise HTTPException(status_code=404, detail="Photo not found")
+    return photo
+
+
+@router.post("/{photo_id}/process-now", status_code=202)
+async def process_photo_now(
+    photo_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(require_organizer),
+    db: AsyncSession = Depends(get_db),
+):
+    photo = await _get_photo_for_organizer(photo_id, current_user, db)
+    if not photo.original_key:
+        raise HTTPException(
+            status_code=409,
+            detail="This photo does not have a stored original yet. Re-import or upload it again.",
+        )
+
+    await lock_event_face_mutation(photo.event_id, db)
+    active_rows = (await db.execute(
+        select(ProcessingBatchItem, ProcessingBatch)
+        .join(ProcessingBatch, ProcessingBatch.id == ProcessingBatchItem.batch_id)
+        .where(
+            ProcessingBatchItem.photo_id == photo.id,
+            ProcessingBatchItem.status.notin_(TERMINAL_ITEM_STATUSES),
+            ProcessingBatch.status.in_([
+                BatchStatus.receiving,
+                BatchStatus.queued,
+                BatchStatus.running,
+                BatchStatus.finalizing,
+            ]),
+        )
+        .order_by(ProcessingBatchItem.queued_at.desc())
+    )).all()
+
+    dispatch_items: List[tuple[str, str]] = []
+    if active_rows:
+        for item, _batch in active_rows:
+            if item.status == BatchItemStatus.queued:
+                dispatch_items.append((str(photo.id), str(item.id)))
+        if photo.status != PhotoStatus.processing:
+            photo.status = PhotoStatus.queued
+            photo.error_message = None
+        message = (
+            "Photo is already processing."
+            if not dispatch_items and photo.status == PhotoStatus.processing
+            else "Queued photo was dispatched for processing."
+        )
+    else:
+        photo.status = PhotoStatus.queued
+        photo.error_message = None
+        processing_batch = await create_batch(
+            db,
+            tenant_id=photo.tenant_id,
+            event_id=photo.event_id,
+            created_by_user_id=current_user.id,
+            source=BatchSource.retry,
+            expected_images=1,
+        )
+        item = await append_item(
+            db,
+            batch_id=processing_batch.id,
+            photo_id=photo.id,
+            filename=photo.filename,
+        )
+        processing_batch = await seal_batch(
+            db,
+            batch_id=processing_batch.id,
+            tenant_id=photo.tenant_id,
+            event_id=photo.event_id,
+        )
+        dispatch_items.append((str(photo.id), str(item.id)))
+        message = "Photo was queued for processing."
+
+    await db.commit()
+    if dispatch_items:
+        await _dispatch_batch_items(
+            items=dispatch_items,
+            event=None,
+            background_tasks=background_tasks,
+        )
+    return {"message": message, "dispatched": len(dispatch_items)}
+
+
+@router.post("/{photo_id}/cancel", response_model=MessageResponse)
+async def cancel_photo_processing(
+    photo_id: uuid.UUID,
+    current_user: User = Depends(require_organizer),
+    db: AsyncSession = Depends(get_db),
+):
+    photo = await _get_photo_for_organizer(photo_id, current_user, db)
+    if photo.status not in (PhotoStatus.queued, PhotoStatus.processing):
+        return MessageResponse(message="Photo is not queued or processing.")
+
+    await lock_event_face_mutation(photo.event_id, db)
+    active_items = (await db.execute(
+        select(ProcessingBatchItem).where(
+            ProcessingBatchItem.photo_id == photo.id,
+            ProcessingBatchItem.status.notin_(TERMINAL_ITEM_STATUSES),
+        )
+    )).scalars().all()
+    batch_finalizing = False
+    for item in active_items:
+        transition = await mark_item_terminal(
+            db,
+            item_id=item.id,
+            status=BatchItemStatus.cancelled,
+            error_message="Cancelled by organizer",
+        )
+        batch_finalizing = batch_finalizing or transition.batch_finalizing
+    photo.status = PhotoStatus.failed
+    photo.error_message = "Cancelled by organizer"
+    await db.commit()
+    if batch_finalizing:
+        await _schedule_recluster_if_idle(photo.event_id)
+    return MessageResponse(message="Photo processing cancelled.")
+
+
+@router.delete("/{photo_id}", response_model=MessageResponse)
+async def remove_photo(
+    photo_id: uuid.UUID,
+    current_user: User = Depends(require_organizer),
+    db: AsyncSession = Depends(get_db),
+):
+    photo = await _get_photo_for_organizer(photo_id, current_user, db)
+    event_id = photo.event_id
+    await lock_event_face_mutation(photo.event_id, db)
+
+    from ..services.storage_cleanup import collect_photo_assets
+
+    asset_keys, deleted_bytes = await collect_photo_assets(db, [photo])
+    active_items = (await db.execute(
+        select(ProcessingBatchItem).where(
+            ProcessingBatchItem.photo_id == photo.id,
+            ProcessingBatchItem.status.notin_(TERMINAL_ITEM_STATUSES),
+        )
+    )).scalars().all()
+    batch_finalizing = False
+    for item in active_items:
+        transition = await mark_item_terminal(
+            db,
+            item_id=item.id,
+            status=BatchItemStatus.cancelled,
+            error_message="Photo removed by organizer",
+        )
+        batch_finalizing = batch_finalizing or transition.batch_finalizing
+
+    if deleted_bytes:
+        sub_result = await db.execute(
+            select(Subscription).where(Subscription.tenant_id == current_user.tenant_id)
+        )
+        sub = sub_result.scalar_one_or_none()
+        if sub:
+            sub.current_storage_bytes = max(
+                0,
+                (sub.current_storage_bytes or 0) - deleted_bytes,
+            )
+    await db.delete(photo)
+    await db.commit()
+    try:
+        await run_in_threadpool(delete_objects, asset_keys)
+    except Exception as cleanup_error:
+        print(f"Deferred storage cleanup failed: {cleanup_error}")
+    if batch_finalizing:
+        await _schedule_recluster_if_idle(event_id)
+    return MessageResponse(message="Photo removed.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -589,49 +1051,56 @@ async def clear_event_photos(
     event_id: uuid.UUID,
     current_user: User = Depends(require_organizer),
     db: AsyncSession = Depends(get_db),
-    status_filter: str = "all" # 'all', 'failed', 'queued'
+    status_filter: Literal["all", "failed", "queued"] = "all",
 ):
     """
-    Deletes photos from the database for an event. 
-    In a real app, this should also delete objects from R2. 
-    Here we delete DB rows to clear UI state.
+    Delete selected event photos and their R2 assets.
+
+    Database state commits first; object cleanup is fail-soft so a storage
+    outage cannot leave live photo rows pointing at deleted originals.
     """
     await _get_event_or_404(event_id, current_user.tenant_id, db)
+    await lock_event_face_mutation(event_id, db)
 
     query = select(Photo).where(Photo.event_id == event_id)
     if status_filter != "all":
         query = query.where(Photo.status == status_filter)
 
-    from ..services.storage import delete_objects
-    from fastapi.concurrency import run_in_threadpool
-    from ..models import FaceDetection
+    from ..services.storage_cleanup import collect_photo_assets
 
     result = await db.execute(query)
     photos = result.scalars().all()
-    photo_ids = [p.id for p in photos]
+    asset_keys, deleted_bytes = await collect_photo_assets(db, photos)
 
-    keys_to_delete = []
-    
+    photo_ids = [photo.id for photo in photos]
     if photo_ids:
-        # Collect face keys for R2 deletion (chunked to avoid query limits)
-        for i in range(0, len(photo_ids), 500):
-            chunk = photo_ids[i:i+500]
-            det_res = await db.execute(select(FaceDetection).where(FaceDetection.photo_id.in_(chunk)))
-            for d in det_res.scalars().all():
-                if d.face_key:
-                    keys_to_delete.append(d.face_key)
+        active_items = (await db.execute(
+            select(ProcessingBatchItem).where(
+                ProcessingBatchItem.photo_id.in_(photo_ids),
+                ProcessingBatchItem.status.notin_(TERMINAL_ITEM_STATUSES),
+            )
+        )).scalars().all()
+        for item in active_items:
+            await mark_item_terminal(
+                db,
+                item_id=item.id,
+                status=BatchItemStatus.cancelled,
+                error_message="Photo removed by organizer",
+            )
 
     for p in photos:
-        if p.original_key:
-            keys_to_delete.append(p.original_key)
-        if p.thumbnail_key:
-            keys_to_delete.append(p.thumbnail_key)
         await db.delete(p)
-    
-    if keys_to_delete:
-        # Boto3 delete_objects takes max 1000 keys per request
-        for i in range(0, len(keys_to_delete), 1000):
-            await run_in_threadpool(delete_objects, keys_to_delete[i:i+1000])
+
+    if deleted_bytes:
+        sub_result = await db.execute(
+            select(Subscription).where(Subscription.tenant_id == current_user.tenant_id)
+        )
+        sub = sub_result.scalar_one_or_none()
+        if sub:
+            sub.current_storage_bytes = max(
+                0,
+                (sub.current_storage_bytes or 0) - deleted_bytes,
+            )
     
     # Also delete face clusters if we are clearing all photos
     if status_filter == "all":
@@ -641,22 +1110,138 @@ async def clear_event_photos(
             await db.delete(c)
 
     await db.commit()
+    # Database deletion is authoritative. Storage cleanup happens only after a
+    # successful commit, so a DB failure can never leave live rows with missing
+    # originals. Failures here can leak objects but cannot lose referenced data.
+    for offset in range(0, len(asset_keys), 1000):
+        try:
+            await run_in_threadpool(delete_objects, asset_keys[offset:offset + 1000])
+        except Exception as cleanup_error:
+            print(f"Deferred storage cleanup failed: {cleanup_error}")
     return MessageResponse(message=f"Deleted {len(photos)} photos.")
 
 
 # ───────────────────────────────────────────────────────────────────────────────
 # Retry failed photos
 # ───────────────────────────────────────────────────────────────────────────────
-async def _reprocess_failed_background(photo_ids: List[str], event: Event):
+@router.post("/events/{event_id}/reprocess-faces", status_code=202)
+async def reprocess_event_faces(
+    event_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(require_organizer),
+    db: AsyncSession = Depends(get_db),
+):
+    """Re-embed every original with the current, pinned face pipeline.
+
+    This is intentionally explicit: legacy and current embeddings are never
+    compared merely because both happen to contain 512 floats.
+    """
+    event = await _get_event_or_404(event_id, current_user.tenant_id, db)
+    await lock_event_face_mutation(event_id, db)
+    photos = (await db.execute(
+        select(Photo).where(Photo.event_id == event_id).order_by(Photo.uploaded_at, Photo.id)
+    )).scalars().all()
+    if not photos:
+        return {"reprocessing": 0, "message": "This event has no photos."}
+
+    active_count = (await db.execute(
+        select(func.count(Photo.id)).where(
+            Photo.event_id == event_id,
+            Photo.status.in_([PhotoStatus.queued, PhotoStatus.processing]),
+        )
+    )).scalar() or 0
+    if active_count:
+        raise HTTPException(
+            status_code=409,
+            detail="Wait for current photo processing to finish before rebuilding face groups.",
+        )
+
+    face_keys = list((await db.execute(
+        select(FaceDetection.face_key)
+        .join(Photo, Photo.id == FaceDetection.photo_id)
+        .where(Photo.event_id == event_id, FaceDetection.face_key.is_not(None))
+    )).scalars().all())
+
+    processing_batch = await create_batch(
+        db,
+        tenant_id=event.tenant_id,
+        event_id=event.id,
+        created_by_user_id=current_user.id,
+        source=BatchSource.reprocess,
+        expected_images=len(photos),
+    )
+    items = await append_photo_items(db, batch_id=processing_batch.id, photos=photos)
+
+    photo_ids_query = select(Photo.id).where(Photo.event_id == event_id)
+    await db.execute(
+        delete(FaceDetection).where(FaceDetection.photo_id.in_(photo_ids_query))
+    )
+    await db.execute(delete(FaceCluster).where(FaceCluster.event_id == event_id))
+    await db.execute(
+        update(Photo)
+        .where(Photo.event_id == event_id)
+        .values(status=PhotoStatus.queued, error_message=None)
+    )
+    processing_batch = await seal_batch(
+        db,
+        batch_id=processing_batch.id,
+        tenant_id=event.tenant_id,
+        event_id=event.id,
+    )
+    db.add(AuditLog(
+        user_id=current_user.id,
+        tenant_id=current_user.tenant_id,
+        action="faces.reprocess_all",
+        resource_type="event",
+        resource_id=str(event_id),
+        payload={"photo_count": len(photos), "batch_id": str(processing_batch.id)},
+    ))
+    await db.commit()
+
+    dispatch_items = [(str(item.photo_id), str(item.id)) for item in items if item.photo_id]
+    await _dispatch_batch_items(
+        items=dispatch_items,
+        event=event,
+        background_tasks=background_tasks,
+    )
+    for offset in range(0, len(face_keys), 1000):
+        background_tasks.add_task(delete_objects, face_keys[offset:offset + 1000])
+
+    return {
+        "reprocessing": len(dispatch_items),
+        "message": f"Reprocessing {len(dispatch_items)} photo(s) with the current face model.",
+        "batch_id": str(processing_batch.id),
+        "batch_status": processing_batch.status.value,
+    }
+
+
+async def _reprocess_failed_background(
+    photo_ids: List[str],
+    event: Event,
+    batch_item_ids: Optional[Dict[str, str]] = None,
+):
     """Re-download originals from R2 and re-run face detection for failed photos."""
+    batch_item_ids = batch_item_ids or {}
     for pid in photo_ids:
         async with async_session_maker() as db:
             photo_uuid = uuid.UUID(pid)
+            item_id = uuid.UUID(batch_item_ids[pid]) if pid in batch_item_ids else None
+            started = time.perf_counter()
             try:
                 res = await db.execute(select(Photo).where(Photo.id == photo_uuid))
                 photo = res.scalar_one_or_none()
                 if not photo or not photo.original_key:
-                    continue
+                    raise ValueError("Photo or original object is unavailable")
+
+                if item_id is not None:
+                    claimed = await mark_item_started(
+                        db,
+                        item_id=item_id,
+                        processor=detect_runtime_processor(),
+                    )
+                    if not claimed:
+                        await db.rollback()
+                        continue
 
                 # Mark as processing
                 photo.status = PhotoStatus.processing
@@ -675,10 +1260,13 @@ async def _reprocess_failed_background(photo_ids: List[str], event: Event):
 
                 # Run face detection — image_bytes freed immediately after
                 detected_faces = await run_in_threadpool(detect_and_embed, image_bytes, fname)
+                processor = detect_runtime_processor()
+                set_local_processor(processor)
                 del image_bytes   # Free 50-100 MB immediately
                 gc.collect()
 
                 async with async_session_maker() as db2:
+                    await lock_event_face_mutation(event.id, db2)
                     # Remove any old (broken) face detections for this photo
                     old_dets = await db2.execute(
                         select(FaceDetection).where(FaceDetection.photo_id == photo_uuid)
@@ -687,7 +1275,8 @@ async def _reprocess_failed_background(photo_ids: List[str], event: Event):
                         await db2.delete(det)
                     await db2.flush()
 
-                    for face in detected_faces:
+                    pipeline_version = _pipeline_version()
+                    for face_index, face in enumerate(detected_faces):
                         detection = FaceDetection(
                             photo_id=photo_uuid,
                             bbox={"x1": face.bbox[0], "y1": face.bbox[1],
@@ -695,6 +1284,8 @@ async def _reprocess_failed_background(photo_ids: List[str], event: Event):
                             detection_confidence=face.confidence,
                             quality_score=face.quality_score,
                             embedding=embedding_to_bytes(face.embedding),
+                            pipeline_version=pipeline_version,
+                            face_index=face_index,
                             is_low_quality=face.is_low_quality,
                         )
                         db2.add(detection)
@@ -724,7 +1315,23 @@ async def _reprocess_failed_background(photo_ids: List[str], event: Event):
                     if photo_obj:
                         photo_obj.status = PhotoStatus.done
                         photo_obj.error_message = None
+                    transition = None
+                    if item_id is not None:
+                        transition = await mark_item_terminal(
+                            db2,
+                            item_id=item_id,
+                            status=BatchItemStatus.succeeded,
+                            faces_detected=len(detected_faces),
+                            processing_ms=int((time.perf_counter() - started) * 1000),
+                            processor=processor,
+                        )
                     await db2.commit()
+                    if transition and transition.applied:
+                        record_completion_sync(
+                            batch_id=transition.batch_id,
+                            tenant_id=transition.tenant_id,
+                            faces_detected=len(detected_faces),
+                        )
 
                 # Small pause between photos so GC can reclaim memory
                 await asyncio.sleep(0.5)
@@ -738,9 +1345,27 @@ async def _reprocess_failed_background(photo_ids: List[str], event: Event):
                         if photo_obj:
                             photo_obj.status = PhotoStatus.failed
                             photo_obj.error_message = str(e)[:500]
+                        transition = None
+                        if item_id is not None:
+                            transition = await mark_item_terminal(
+                                dberr,
+                                item_id=item_id,
+                                status=BatchItemStatus.failed,
+                                processing_ms=int((time.perf_counter() - started) * 1000),
+                                processor=detect_runtime_processor(),
+                                error_message=str(e),
+                            )
                         await dberr.commit()
+                        if transition and transition.applied:
+                            record_completion_sync(
+                                batch_id=transition.batch_id,
+                                tenant_id=transition.tenant_id,
+                                faces_detected=0,
+                            )
                 except Exception:
                     pass
+
+    await _schedule_recluster_if_idle(event.id)
 
 
 @router.post("/events/{event_id}/retry-failed", status_code=202)
@@ -751,15 +1376,16 @@ async def retry_failed_photos(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Re-process all failed (or stuck) photos for an event.
+    Re-process failed photos for an event.
     Downloads originals from R2 and reruns face detection — no re-upload needed.
     """
     event = await _get_event_or_404(event_id, current_user.tenant_id, db)
+    await lock_event_face_mutation(event_id, db)
 
     result = await db.execute(
         select(Photo).where(
             Photo.event_id == event_id,
-            Photo.status.in_([PhotoStatus.failed, PhotoStatus.queued, PhotoStatus.processing])
+            Photo.status == PhotoStatus.failed,
         )
     )
     failed_photos = result.scalars().all()
@@ -767,28 +1393,86 @@ async def retry_failed_photos(
     if not failed_photos:
         return {"retrying": 0, "message": "No failed photos found."}
 
-    photo_ids = [str(p.id) for p in failed_photos]
+    failed_ids = [photo.id for photo in failed_photos]
+    drive_ref_rows = (await db.execute(
+        select(ProcessingBatchItem.photo_id, ProcessingBatchItem.source_ref)
+        .join(ProcessingBatch, ProcessingBatch.id == ProcessingBatchItem.batch_id)
+        .where(
+            ProcessingBatchItem.photo_id.in_(failed_ids),
+            ProcessingBatchItem.source_ref.is_not(None),
+            ProcessingBatch.source == BatchSource.drive_import,
+        )
+        .order_by(ProcessingBatchItem.queued_at.desc())
+    )).all()
+    drive_refs: Dict[uuid.UUID, str] = {}
+    for photo_id, source_ref in drive_ref_rows:
+        if photo_id is not None and source_ref and photo_id not in drive_refs:
+            drive_refs[photo_id] = source_ref
 
-    # Reset status to queued so UI shows them as pending
-    for p in failed_photos:
-        p.status = PhotoStatus.queued
-        p.error_message = None
+    stored_photos = [(photo, None) for photo in failed_photos if photo.original_key]
+    drive_photos = [
+        (photo, drive_refs[photo.id])
+        for photo in failed_photos
+        if not photo.original_key and photo.id in drive_refs
+    ]
+    unrecoverable = len(failed_photos) - len(stored_photos) - len(drive_photos)
+
+    dispatch_items: List[tuple[str, str]] = []
+    processing_batches: List[ProcessingBatch] = []
+    for source, photos_with_refs in (
+        (BatchSource.retry, stored_photos),
+        (BatchSource.drive_import, drive_photos),
+    ):
+        if not photos_with_refs:
+            continue
+        processing_batch = await create_batch(
+            db,
+            tenant_id=event.tenant_id,
+            event_id=event.id,
+            created_by_user_id=current_user.id,
+            source=source,
+            expected_images=len(photos_with_refs),
+        )
+        for photo, source_ref in photos_with_refs:
+            photo.status = PhotoStatus.queued
+            photo.error_message = None
+            item = await append_item(
+                db,
+                batch_id=processing_batch.id,
+                photo_id=photo.id,
+                filename=photo.filename,
+                source_ref=source_ref,
+            )
+            dispatch_items.append((str(photo.id), str(item.id)))
+        processing_batch = await seal_batch(
+            db,
+            batch_id=processing_batch.id,
+            tenant_id=event.tenant_id,
+            event_id=event.id,
+        )
+        processing_batches.append(processing_batch)
     await db.commit()
 
-    # Move Celery dispatch to a background task to prevent blocking the event loop
-    def _dispatch_all():
-        from ..workers.tasks import process_photo
-        for p_id in photo_ids:
-            try:
-                process_photo.delay(str(p_id), str(event.tenant_id), str(event.id))
-            except Exception as e:
-                print(f"Failed to dispatch {p_id}: {e}")
+    if dispatch_items:
+        await _dispatch_batch_items(
+            items=dispatch_items,
+            event=event,
+            background_tasks=background_tasks,
+        )
 
-    background_tasks.add_task(_dispatch_all)
-
+    retrying = len(dispatch_items)
+    message = f"Retrying {retrying} photo(s) in the background."
+    if unrecoverable:
+        message += (
+            f" {unrecoverable} Drive photo(s) no longer have a source reference; "
+            "select them again in Drive to re-import."
+        )
     return {
-        "retrying": len(photo_ids),
-        "message": f"Retrying {len(photo_ids)} photo(s) in the background."
+        "retrying": retrying,
+        "message": message,
+        "batch_id": str(processing_batches[0].id) if processing_batches else None,
+        "batch_ids": [str(batch.id) for batch in processing_batches],
+        "batch_status": processing_batches[0].status.value if processing_batches else None,
     }
 
 

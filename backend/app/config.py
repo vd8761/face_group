@@ -2,13 +2,15 @@
 Application configuration — reads from environment variables.
 All secrets must be set in .env (locally) or Render environment variables (production).
 """
-from pydantic_settings import BaseSettings
-from pydantic import field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator, model_validator
 from functools import lru_cache
 from typing import Optional
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
     # ── App ──────────────────────────────────────────────────────────────────
     APP_NAME: str = "PhotoGroup"
     APP_VERSION: str = "1.0.0"
@@ -78,14 +80,49 @@ class Settings(BaseSettings):
         return v
 
     # ── ML Pipeline ───────────────────────────────────────────────────────────
-    # InsightFace buffalo_l — best accuracy, requires 2GB RAM (Render Standard plan)
-    FACE_DETECTION_THRESHOLD: float = 0.80
-    FACE_MIN_SIZE: int = 60
+    # Pin the recognition model: embeddings from different model packs are not
+    # comparable, even when both happen to contain 512 float32 values.
+    INSIGHTFACE_MODEL: str = "buffalo_l"
+    # Matches the model cache populated by backend/Dockerfile. Local GPU
+    # installations can override this with an absolute persistent directory.
+    INSIGHTFACE_HOME: str = "/tmp/insightface_cache"
+    FACE_PIPELINE_VERSION: str = "insightface-buffalo-l-v2"
     EMBEDDING_DIM: int = 512                     # ArcFace 512-dim
 
+    # Detector detail. A global pass is followed by an overlapping 2x2 tiled
+    # pass for large images, which preserves small faces in group photographs.
+    FACE_PROCESS_MAX_DIM: int = 1920
+    FACE_DETECTION_SIZE: int = 1024
+    FACE_ENABLE_TILING: bool = True
+    FACE_TILE_TRIGGER_DIM: int = 1600
+    FACE_TILE_OVERLAP: float = 0.12
+    FACE_DEDUP_IOU_THRESHOLD: float = 0.40
+
+    # Hard usability and high-quality anchor gates are deliberately separate.
+    # A 24-59px face can attach to a strong identity but cannot bridge clusters.
+    FACE_HARD_DETECTION_THRESHOLD: float = 0.60
+    FACE_DETECTION_THRESHOLD: float = 0.80       # High-quality anchor threshold
+    FACE_HARD_MIN_SIZE: int = 24
+    FACE_MIN_SIZE: int = 60                      # Backwards-compatible anchor size
+    FACE_ANCHOR_MIN_SIZE: int = 60
+    FACE_HARD_MAX_YAW: float = 65.0
+    FACE_ANCHOR_MAX_YAW: float = 45.0
+    FACE_ANCHOR_QUALITY_THRESHOLD: float = 0.58
+
     # ── Agglomerative Clustering ──────────────────────────────────────────────
-    AGGLOMERATIVE_DISTANCE_THRESHOLD: float = 0.75
-    COSINE_MATCH_THRESHOLD: float = 0.75          # < this = same person (lower = stricter)
+    AGGLOMERATIVE_DISTANCE_THRESHOLD: float = 0.45
+    COSINE_MATCH_THRESHOLD: float = 0.45          # < this = same person (lower = stricter)
+    CLUSTER_MAX_DISTANCE_THRESHOLD: float = 0.52  # Prevent average-link chaining
+    FACE_ATTACH_DISTANCE_THRESHOLD: float = 0.38  # Strict low-quality attachment
+    FACE_ATTACH_MARGIN: float = 0.05
+    CLUSTER_ID_REUSE_MIN_OVERLAP: float = 0.50
+
+    # Selfie search has a separate one-to-many risk profile. Moderate matches
+    # need support from multiple person prototypes; very strong matches do not.
+    SELFIE_MATCH_THRESHOLD: float = 0.50
+    SELFIE_STRONG_MATCH_THRESHOLD: float = 0.38
+    SELFIE_MATCH_MARGIN: float = 0.08
+    SELFIE_PROTOTYPES_PER_CLUSTER: int = 5
 
     # ── File size limits ──────────────────────────────────────────────────────
     MAX_UPLOAD_SIZE_MB: int = 100  # Per-photo max (RAW files can be 50-80MB)
@@ -110,10 +147,54 @@ class Settings(BaseSettings):
     # ── Rate limiting ─────────────────────────────────────────────────────────
     SCAN_RATE_LIMIT: int = 10  # Max selfie scan requests per IP per hour
 
-    class Config:
-        env_file = ".env"
-        extra = "ignore"
+    @model_validator(mode="after")
+    def validate_face_pipeline(self):
+        # Older deployments exposed FACE_MIN_SIZE. Honor it as the anchor size
+        # unless the new explicit setting was also supplied.
+        fields_set = getattr(self, "model_fields_set", set())
+        if "FACE_MIN_SIZE" in fields_set and "FACE_ANCHOR_MIN_SIZE" not in fields_set:
+            self.FACE_ANCHOR_MIN_SIZE = self.FACE_MIN_SIZE
 
+        unit_interval = (
+            "FACE_TILE_OVERLAP",
+            "FACE_DEDUP_IOU_THRESHOLD",
+            "FACE_HARD_DETECTION_THRESHOLD",
+            "FACE_DETECTION_THRESHOLD",
+            "FACE_ANCHOR_QUALITY_THRESHOLD",
+            "AGGLOMERATIVE_DISTANCE_THRESHOLD",
+            "COSINE_MATCH_THRESHOLD",
+            "CLUSTER_MAX_DISTANCE_THRESHOLD",
+            "FACE_ATTACH_DISTANCE_THRESHOLD",
+            "FACE_ATTACH_MARGIN",
+            "SELFIE_MATCH_THRESHOLD",
+            "SELFIE_STRONG_MATCH_THRESHOLD",
+            "SELFIE_MATCH_MARGIN",
+        )
+        for field_name in unit_interval:
+            value = float(getattr(self, field_name))
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"{field_name} must be between 0 and 1")
+
+        # Old deployments commonly carry 0.65-0.75 clustering values. Keep
+        # startup backward-compatible while enforcing the safer v2 ceilings.
+        self.AGGLOMERATIVE_DISTANCE_THRESHOLD = min(
+            self.AGGLOMERATIVE_DISTANCE_THRESHOLD, 0.45
+        )
+        self.COSINE_MATCH_THRESHOLD = min(self.COSINE_MATCH_THRESHOLD, 0.45)
+        self.FACE_ATTACH_DISTANCE_THRESHOLD = min(
+            self.FACE_ATTACH_DISTANCE_THRESHOLD,
+            self.COSINE_MATCH_THRESHOLD,
+            0.38,
+        )
+        if self.FACE_HARD_MIN_SIZE > self.FACE_ANCHOR_MIN_SIZE:
+            raise ValueError("FACE_HARD_MIN_SIZE cannot exceed FACE_ANCHOR_MIN_SIZE")
+        if self.FACE_HARD_DETECTION_THRESHOLD > self.FACE_DETECTION_THRESHOLD:
+            raise ValueError(
+                "FACE_HARD_DETECTION_THRESHOLD cannot exceed FACE_DETECTION_THRESHOLD"
+            )
+        if self.COSINE_MATCH_THRESHOLD > self.CLUSTER_MAX_DISTANCE_THRESHOLD:
+            raise ValueError("COSINE_MATCH_THRESHOLD cannot exceed the complete-link gate")
+        return self
 
 @lru_cache()
 def get_settings() -> Settings:

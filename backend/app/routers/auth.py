@@ -39,7 +39,10 @@ async def attendee_join(body: AttendeeJoinRequest, request: Request, db: AsyncSe
     """Attendee self-registers using an event access code."""
     # Validate access code
     event_result = await db.execute(
-        select(Event).where(Event.access_code == body.access_code, Event.is_active == True)
+        select(Event).where(
+            Event.access_code == body.access_code.upper().strip(),
+            Event.is_active == True,
+        )
     )
     event = event_result.scalar_one_or_none()
     if not event:
@@ -59,6 +62,22 @@ async def attendee_join(body: AttendeeJoinRequest, request: Request, db: AsyncSe
         )
         db.add(user)
         await db.flush()
+    else:
+        if user.role != UserRole.attendee:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This email belongs to a staff account. Please use the sign-in page.",
+            )
+        if not verify_password(body.password, user.password_hash):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid email or password",
+            )
+        if user.tenant_id != event.tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This attendee account belongs to another organization.",
+            )
 
     token = create_access_token(user.id, event.tenant_id, user.role)
     return TokenResponse(

@@ -1,12 +1,16 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Plus, Calendar, Image, Users, CheckCircle2, Clock,
   X, ArrowRight, Loader2, Key, Copy, Check, Sparkles,
-  TrendingUp, Camera, Activity
+  Activity
 } from 'lucide-react';
 import api from '../api/client';
+import { isRunningBatch, useProcessing } from '../context/ProcessingContext';
+import ProcessingOverview from '../components/processing/ProcessingOverview';
+import DeviceBadge from '../components/processing/DeviceBadge';
+import { batchProgress, formatEta, formatPhase, formatRate, readBatchCount } from '../components/processing/formatters';
 
 function copyToClipboard(text, setCopied) {
   navigator.clipboard.writeText(text).then(() => {
@@ -16,6 +20,7 @@ function copyToClipboard(text, setCopied) {
 }
 
 export default function OrganizerDashboard() {
+  const processing = useProcessing();
   const [events, setEvents]   = useState([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
@@ -23,17 +28,30 @@ export default function OrganizerDashboard() {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState('');
   const [copiedId, setCopiedId] = useState(null);
+  const previousRunningBatches = useRef(0);
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
+  const loadData = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const res = await api.get('/api/events/');
       setEvents(res.data);
     } catch (e) { console.error(e); }
-    finally { setLoading(false); }
+    finally { if (!silent) setLoading(false); }
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  useEffect(() => {
+    const running = Number(processing.summary.running_batches || 0);
+    if (previousRunningBatches.current > running) loadData(true);
+    previousRunningBatches.current = running;
+  }, [loadData, processing.summary.running_batches]);
+
+  useEffect(() => {
+    if (!processing.summary.running_batches) return undefined;
+    const timer = setInterval(() => loadData(true), 10000);
+    return () => clearInterval(timer);
+  }, [loadData, processing.summary.running_batches]);
 
   const createEvent = async () => {
     if (!form.name.trim()) return;
@@ -50,6 +68,11 @@ export default function OrganizerDashboard() {
   const totalPhotos   = events.reduce((s, e) => s + (e.photo_count || 0), 0);
   const totalClusters = events.reduce((s, e) => s + (e.cluster_count || 0), 0);
   const totalDone     = events.reduce((s, e) => s + (e.processed_count || 0), 0);
+  const liveBatches = [...processing.batches].sort((a, b) => {
+    const activeDifference = Number(isRunningBatch(b)) - Number(isRunningBatch(a));
+    if (activeDifference) return activeDifference;
+    return new Date(b.updated_at || b.started_at || 0) - new Date(a.updated_at || a.started_at || 0);
+  });
 
   return (
     <div style={{ flex: 1, background: 'var(--color-bg)' }}>
@@ -65,7 +88,7 @@ export default function OrganizerDashboard() {
                 My Events
               </h2>
               <p style={{ color: 'var(--text-muted)', fontSize: '0.95rem', margin: 0 }}>
-                Manage your photo galleries, uploads, and face clusters.
+                Manage your photo galleries, uploads, and People groups.
               </p>
             </div>
             <button
@@ -86,7 +109,7 @@ export default function OrganizerDashboard() {
             { icon: Calendar,   label: 'Total Events',     value: events.length,               color: 'var(--primary)', bg: '#fff' },
             { icon: Image,      label: 'Total Photos',     value: totalPhotos.toLocaleString(), color: 'var(--primary)', bg: '#fff' },
             { icon: CheckCircle2, label: 'Processed',      value: totalDone.toLocaleString(),   color: 'var(--success)', bg: '#fff' },
-            { icon: Users,      label: 'Face Groups',      value: totalClusters,                color: 'var(--primary)', bg: '#fff' },
+            { icon: Users,      label: 'People',           value: totalClusters,                color: 'var(--primary)', bg: '#fff' },
           ].map(({ icon: Icon, label, value, color, bg }, i) => (
             <motion.div
               key={label}
@@ -117,6 +140,21 @@ export default function OrganizerDashboard() {
               </div>
             </motion.div>
           ))}
+        </div>
+
+        <div style={{ marginBottom: '2rem' }}>
+          <ProcessingOverview
+            title="Organization processing"
+            subtitle="Live workload and application resources for your photo batches"
+            summary={processing.summary}
+            resources={processing.resources}
+            batches={liveBatches}
+            connectionState={processing.connectionState}
+            isStale={processing.isStale}
+            hasSnapshot={processing.hasSnapshot}
+            error={processing.error}
+            batchLimit={4}
+          />
         </div>
 
         {/* Section title */}
@@ -156,7 +194,21 @@ export default function OrganizerDashboard() {
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '1.25rem' }}>
             {events.map((event, idx) => {
-              const progress = event.photo_count > 0 ? (event.processed_count / event.photo_count) * 100 : 0;
+              const eventBatches = liveBatches.filter((batch) => String(batch.event_id) === String(event.id));
+              const liveBatch = eventBatches.find(isRunningBatch) || eventBatches[0];
+              const historicalCompleted = Math.min(
+                Number(event.photo_count) || 0,
+                (Number(event.processed_count) || 0) + (Number(event.failed_count) || 0),
+              );
+              const historicalProgress = event.photo_count > 0 ? (historicalCompleted / event.photo_count) * 100 : 0;
+              const progress = liveBatch ? batchProgress(liveBatch) : historicalProgress;
+              const liveCompleted = liveBatch ? (
+                readBatchCount(liveBatch, 'completed_images')
+                || readBatchCount(liveBatch, 'succeeded_images')
+                  + readBatchCount(liveBatch, 'failed_images')
+                  + readBatchCount(liveBatch, 'skipped_images')
+              ) : historicalCompleted;
+              const liveTotal = liveBatch ? readBatchCount(liveBatch, 'total_images') : event.photo_count;
               const isCopied = copiedId === event.id;
               return (
                 <motion.div
@@ -206,7 +258,7 @@ export default function OrganizerDashboard() {
                     {[
                       { label: 'Photos',  value: event.photo_count,     color: '#2563eb', bg: 'rgba(37,99,235,0.08)' },
                       { label: 'Done',    value: event.processed_count, color: '#16a34a', bg: 'rgba(22,163,74,0.08)' },
-                      { label: 'Groups',  value: event.cluster_count,   color: '#7c3aed', bg: 'rgba(124,58,237,0.08)' },
+                      { label: 'People',  value: event.cluster_count,   color: '#7c3aed', bg: 'rgba(124,58,237,0.08)' },
                     ].map(({ label, value, color, bg }) => (
                       <div key={label} style={{ flex: 1, background: bg, borderRadius: 'var(--radius-md)', padding: '0.625rem 0.5rem', textAlign: 'center' }}>
                         <div style={{ fontSize: '1.2rem', fontWeight: 800, color, lineHeight: 1 }}>{value}</div>
@@ -216,17 +268,17 @@ export default function OrganizerDashboard() {
                   </div>
 
                   {/* Progress bar */}
-                  {event.photo_count > 0 && (
+                  {(event.photo_count > 0 || liveBatch) && (
                     <div>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.375rem' }}>
                         <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                          {progress === 100
+                          {progress >= 100
                             ? <CheckCircle2 size={11} color="var(--success)" />
                             : <Clock size={11} color="var(--warning)" />}
-                          Processing
+                          {liveBatch ? formatPhase(liveBatch.phase, liveBatch.status) : 'Processing'}
                         </span>
                         <span style={{ fontSize: '0.75rem', fontWeight: 600, color: progress === 100 ? 'var(--success)' : 'var(--text-secondary)' }}>
-                          {event.processed_count}/{event.photo_count}
+                          {liveCompleted}/{liveTotal}
                         </span>
                       </div>
                       <div style={{ height: 6, background: 'var(--color-surface-2)', borderRadius: 999, overflow: 'hidden' }}>
@@ -239,6 +291,14 @@ export default function OrganizerDashboard() {
                           transition: 'width 0.6s ease',
                         }} />
                       </div>
+                      {liveBatch && isRunningBatch(liveBatch) && (
+                        <div style={{ alignItems: 'center', display: 'flex', flexWrap: 'wrap', gap: '0.4rem', marginTop: '0.5rem' }}>
+                          <DeviceBadge processor={liveBatch.processor} compact />
+                          <span style={{ color: 'var(--text-muted)', fontSize: '0.68rem' }}>
+                            {formatRate(liveBatch.images_per_second)} img/s · ETA {formatEta(liveBatch.eta_seconds)}
+                          </span>
+                        </div>
+                      )}
                     </div>
                   )}
 

@@ -22,13 +22,14 @@ RUN python -c "\
 import os; \
 os.environ['INSIGHTFACE_HOME'] = '/tmp/insightface_cache'; \
 from insightface.app import FaceAnalysis; \
-app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider']); \
-app.prepare(ctx_id=0, det_size=(640,640))"
+app = FaceAnalysis(name='buffalo_l', root='/tmp/insightface_cache', providers=['CPUExecutionProvider']); \
+app.prepare(ctx_id=-1, det_thresh=0.60, det_size=(1024,1024))"
 
 COPY . .
 
 COPY start.sh /start.sh
-RUN chmod +x /start.sh
+COPY worker-start.sh /worker-start.sh
+RUN chmod +x /start.sh /worker-start.sh
 
 EXPOSE 8000
 

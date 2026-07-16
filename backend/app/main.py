@@ -4,6 +4,7 @@ Assembles all routers, middleware, CORS, startup seeding, and health check.
 """
 import uuid
 import os
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -14,7 +15,12 @@ from .config import get_settings
 from .database import init_db, AsyncSessionLocal
 from .models import User, UserRole, AuditLog
 from .auth import hash_password
-from .routers import auth, admin, events, photos, faces, downloads, public
+from .routers import auth, admin, events, photos, faces, downloads, public, processing
+from .services.telemetry import (
+    close_async_client,
+    start_resource_sampler,
+    stop_resource_sampler,
+)
 
 settings = get_settings()
 
@@ -42,7 +48,7 @@ async def seed_super_admin():
         )
         db.add(admin)
         await db.commit()
-        print(f"✅ Super admin seeded: {settings.SUPER_ADMIN_EMAIL}")
+        print(f"Super admin seeded: {settings.SUPER_ADMIN_EMAIL}")
 
 
 @asynccontextmanager
@@ -56,13 +62,29 @@ async def lifespan(app: FastAPI):
             traces_sample_rate=0.1,   # 10% of requests traced
             profiles_sample_rate=0.1,
         )
-        print("✅ Sentry error tracking enabled")
+        print("Sentry error tracking enabled")
 
     # ── DB + seed ──────────────────────────────────────────────────────
     await init_db()
     await seed_super_admin()
-    yield
-    # Shutdown (cleanup if needed)
+    start_resource_sampler("web")
+    from .services.dispatcher import recovery_dispatch_loop
+
+    dispatcher_stop = asyncio.Event()
+    dispatcher_task = asyncio.create_task(
+        recovery_dispatch_loop(dispatcher_stop),
+        name="durable-processing-dispatcher",
+    )
+    try:
+        yield
+    finally:
+        dispatcher_stop.set()
+        try:
+            await asyncio.wait_for(dispatcher_task, timeout=5)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            dispatcher_task.cancel()
+        stop_resource_sampler()
+        await close_async_client()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -96,6 +118,7 @@ app.include_router(photos.router,    prefix="/api")
 app.include_router(faces.router,     prefix="/api")
 app.include_router(downloads.router, prefix="/api")
 app.include_router(public.router,    prefix="/api")
+app.include_router(processing.router, prefix="/api")
 
 
 # ── Health check ─────────────────────────────────────────────────────────────

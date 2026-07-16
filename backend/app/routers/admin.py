@@ -6,12 +6,12 @@ import uuid
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, update
+from sqlalchemy import delete, select, func, update
 
 from ..database import get_db
 from ..models import (
     Tenant, User, UserRole, Subscription, SubscriptionPlan, SubscriptionStatus,
-    Event, Photo, AuditLog
+    Event, Photo, PhotoStatus, AuditLog
 )
 from ..auth import hash_password, require_super_admin
 from ..schemas import (
@@ -19,6 +19,7 @@ from ..schemas import (
     SubscriptionResponse, SubscriptionUpdate,
     SystemStatsResponse, AuditLogResponse, PaginatedAuditLogs, MessageResponse,
 )
+from ..services.storage_cleanup import collect_photo_assets, delete_asset_keys
 
 router = APIRouter(prefix="/admin", tags=["Super Admin"])
 
@@ -42,6 +43,11 @@ async def system_stats(
     total_events = (await db.execute(select(func.count(Event.id)))).scalar()
     total_photos = (await db.execute(select(func.count(Photo.id)))).scalar()
     storage_sum = (await db.execute(select(func.sum(Subscription.current_storage_bytes)))).scalar() or 0
+    queue_depth = (await db.execute(
+        select(func.count(Photo.id)).where(
+            Photo.status.in_([PhotoStatus.queued, PhotoStatus.processing])
+        )
+    )).scalar() or 0
 
     return SystemStatsResponse(
         total_tenants=total_tenants,
@@ -49,7 +55,7 @@ async def system_stats(
         total_events=total_events,
         total_photos=total_photos,
         total_storage_bytes=storage_sum,
-        processing_queue_depth=0,  # TODO: query Celery inspect
+        processing_queue_depth=queue_depth,
     )
 
 
@@ -157,7 +163,23 @@ async def delete_tenant(
     tenant = result.scalar_one_or_none()
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant not found")
-    await db.delete(tenant)
+
+    photos_result = await db.execute(select(Photo).where(Photo.tenant_id == tenant_id))
+    asset_keys, _deleted_bytes = await collect_photo_assets(
+        db, photos_result.scalars().all()
+    )
+
+    # Let PostgreSQL enforce the declared ON DELETE CASCADE relationships.
+    await db.execute(
+        delete(Tenant)
+        .where(Tenant.id == tenant_id)
+        .execution_options(synchronize_session=False)
+    )
+    await db.commit()
+    try:
+        await delete_asset_keys(asset_keys)
+    except Exception as exc:
+        print(f"Deferred tenant storage cleanup failed: {exc}")
     return MessageResponse(message="Tenant and all associated data deleted")
 
 

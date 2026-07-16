@@ -1,5 +1,5 @@
 import { motion, AnimatePresence } from 'framer-motion';
-import { AlertTriangle, X, Trash2, Loader2 } from 'lucide-react';
+import { AlertTriangle, X, Trash2, Loader2, RefreshCw } from 'lucide-react';
 
 export default function ConfirmActionModal({
   isOpen,
@@ -9,7 +9,8 @@ export default function ConfirmActionModal({
   onCancel,
   isLoading = false,
   confirmText = "Delete",
-  cancelText = "Cancel"
+  cancelText = "Cancel",
+  destructive = true,
 }) {
   if (!isOpen) return null;
 
@@ -31,18 +32,20 @@ export default function ConfirmActionModal({
           <div className="flex items-center gap-3 mb-4">
             <div style={{
               width: 48, height: 48,
-              background: 'rgba(239, 68, 68, 0.15)',
-              border: '1px solid rgba(239, 68, 68, 0.3)',
+              background: destructive ? 'rgba(239, 68, 68, 0.15)' : 'var(--accent-soft)',
+              border: destructive ? '1px solid rgba(239, 68, 68, 0.3)' : '1px solid rgba(124,58,237,0.3)',
               borderRadius: '12px',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               flexShrink: 0
             }}>
-              <AlertTriangle size={24} color="var(--error)" />
+              {destructive
+                ? <AlertTriangle size={24} color="var(--error)" />
+                : <RefreshCw size={24} color="var(--accent-light)" />}
             </div>
             <div>
               <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>{title}</h3>
               <p className="text-xs text-muted" style={{ margin: 0, marginTop: '4px', lineHeight: 1.5 }}>
-                This action cannot be undone.
+                {destructive ? 'This action cannot be undone.' : 'This runs safely in the background.'}
               </p>
             </div>
           </div>
@@ -72,7 +75,7 @@ export default function ConfirmActionModal({
               className="btn w-full"
               disabled={isLoading}
               style={{
-                background: 'var(--error)',
+                background: destructive ? 'var(--error)' : 'var(--accent-light)',
                 color: 'white',
                 border: 'none',
                 opacity: isLoading ? 0.7 : 1
@@ -80,11 +83,11 @@ export default function ConfirmActionModal({
             >
               {isLoading ? (
                 <>
-                  <Loader2 size={16} className="animate-spin" /> Deleting...
+                  <Loader2 size={16} className="animate-spin" /> {destructive ? 'Deleting...' : 'Starting...'}
                 </>
               ) : (
                 <>
-                  <Trash2 size={16} /> {confirmText}
+                  {destructive ? <Trash2 size={16} /> : <RefreshCw size={16} />} {confirmText}
                 </>
               )}
             </button>

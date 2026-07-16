@@ -3,10 +3,13 @@ Pydantic request/response schemas for all API endpoints.
 """
 import uuid
 from datetime import datetime
-from typing import Optional, List
+from typing import Any, Dict, Literal, Optional, List
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
-from .models import UserRole, PhotoStatus, SubscriptionPlan, SubscriptionStatus
+from .models import (
+    UserRole, PhotoStatus, SubscriptionPlan, SubscriptionStatus,
+    BatchSource, BatchStatus,
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -26,10 +29,10 @@ class TokenResponse(BaseModel):
 
 
 class AttendeeJoinRequest(BaseModel):
-    access_code: str
+    access_code: str = Field(..., min_length=4, max_length=12)
     email: EmailStr
     full_name: Optional[str] = None
-    password: str
+    password: str = Field(..., min_length=8)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -105,7 +108,13 @@ class EventResponse(BaseModel):
     created_at: datetime
     photo_count: int = 0
     processed_count: int = 0
+    failed_count: int = 0
+    queued_count: int = 0
+    processing_count: int = 0
     cluster_count: int = 0
+    face_pipeline_version: Optional[str] = None
+    legacy_face_count: int = 0
+    needs_face_rebuild: bool = False
 
     class Config:
         from_attributes = True
@@ -127,6 +136,9 @@ class PhotoResponse(BaseModel):
     error_message: Optional[str]
     uploaded_at: datetime
     thumbnail_url: Optional[str] = None
+    preview_url: Optional[str] = None
+    original_size_bytes: int = 0
+    face_count: int = 0
 
     class Config:
         from_attributes = True
@@ -138,11 +150,108 @@ class PhotoListResponse(BaseModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Processing batches + realtime telemetry
+# ─────────────────────────────────────────────────────────────────────────────
+class ProcessingBatchCreateRequest(BaseModel):
+    source: BatchSource = BatchSource.upload
+    expected_images: Optional[int] = Field(default=None, ge=0, le=100_000)
+
+
+class ProcessingBatchResponse(BaseModel):
+    id: uuid.UUID
+    event_id: uuid.UUID
+    source: BatchSource
+    status: BatchStatus
+    expected_images: Optional[int] = None
+    total_images: int
+    completed_images: int
+    succeeded_images: int
+    failed_images: int
+    skipped_images: int
+    faces_detected: int
+    processor: Optional[str] = None
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    last_activity_at: datetime
+    completed_at: Optional[datetime] = None
+    updated_at: datetime
+    finalization_error: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ProcessingSummary(BaseModel):
+    running_batches: int = 0
+    total_images: int = 0
+    completed_images: int = 0
+    succeeded_images: int = 0
+    failed_images: int = 0
+    skipped_images: int = 0
+    active_images: int = 0
+    remaining_images: int = 0
+    faces_detected: int = 0
+    images_per_second: float = 0.0
+    faces_per_second: float = 0.0
+    eta_seconds: Optional[int] = None
+
+
+class ProcessingResources(BaseModel):
+    processor: Literal["cpu", "gpu", "mixed", "unknown"] = "unknown"
+    cpu_percent: Optional[float] = None
+    gpu_percent: Optional[float] = None
+    gpu_memory_used_bytes: Optional[int] = None
+    gpu_memory_total_bytes: Optional[int] = None
+    worker_count: int = 0
+    stale: bool = True
+
+
+class ProcessingBatchMetrics(BaseModel):
+    id: uuid.UUID
+    event_id: uuid.UUID
+    event_name: str
+    source: BatchSource
+    status: BatchStatus
+    phase: str
+    processor: Literal["cpu", "gpu", "mixed", "unknown"] = "unknown"
+    total_images: int = 0
+    completed_images: int = 0
+    succeeded_images: int = 0
+    failed_images: int = 0
+    skipped_images: int = 0
+    active_images: int = 0
+    remaining_images: int = 0
+    faces_detected: int = 0
+    images_per_second: float = 0.0
+    faces_per_second: float = 0.0
+    eta_seconds: Optional[int] = None
+    progress_percent: float = 0.0
+    finalization_error: Optional[str] = None
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    last_activity_at: datetime
+    completed_at: Optional[datetime] = None
+    updated_at: datetime
+
+
+class ProcessingSnapshot(BaseModel):
+    v: Literal[1] = 1
+    type: Literal["processing.snapshot"] = "processing.snapshot"
+    seq: int = 0
+    emitted_at: datetime
+    scope: Dict[str, Any]
+    summary: ProcessingSummary
+    resources: ProcessingResources
+    batches: List[ProcessingBatchMetrics] = []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Face / Cluster
 # ─────────────────────────────────────────────────────────────────────────────
 class ClusterResponse(BaseModel):
     id: uuid.UUID
     member_count: int
+    photo_count: int = 0
     label: Optional[str]
     updated_at: datetime
     # Representative thumbnail URLs from photos in this cluster

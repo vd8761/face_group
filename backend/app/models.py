@@ -8,7 +8,8 @@ from typing import Optional, List
 
 from sqlalchemy import (
     String, Text, Integer, Float, Boolean, DateTime, ForeignKey,
-    LargeBinary, JSON, Enum as SAEnum, func, Index
+    LargeBinary, JSON, Enum as SAEnum, func, Index, CheckConstraint,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
@@ -40,6 +41,33 @@ class SubscriptionStatus(str, enum.Enum):
     active    = "active"
     suspended = "suspended"
     cancelled = "cancelled"
+
+
+class BatchSource(str, enum.Enum):
+    upload       = "upload"
+    drive_import = "drive_import"
+    retry        = "retry"
+    reprocess    = "reprocess"
+
+
+class BatchStatus(str, enum.Enum):
+    receiving      = "receiving"
+    queued         = "queued"
+    running        = "running"
+    finalizing     = "finalizing"
+    completed      = "completed"
+    partial_failed = "partial_failed"
+    failed         = "failed"
+    cancelled      = "cancelled"
+
+
+class BatchItemStatus(str, enum.Enum):
+    queued    = "queued"
+    processing = "processing"
+    succeeded = "succeeded"
+    failed     = "failed"
+    skipped    = "skipped"
+    cancelled  = "cancelled"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -150,6 +178,126 @@ class Photo(Base):
     )
 
 
+# Durable upload/import/retry processing batches. Redis is intentionally not
+# the source of truth for these counters: it is used only for rolling rates and
+# short-lived worker heartbeats.
+class ProcessingBatch(Base):
+    __tablename__ = "processing_batches"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    event_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("events.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    created_by_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    source: Mapped[BatchSource] = mapped_column(
+        SAEnum(BatchSource, name="processing_batch_source"),
+        nullable=False,
+        default=BatchSource.upload,
+    )
+    status: Mapped[BatchStatus] = mapped_column(
+        SAEnum(BatchStatus, name="processing_batch_status"),
+        nullable=False,
+        default=BatchStatus.receiving,
+        index=True,
+    )
+    # Lets the server seal a batch once every selected file (including
+    # duplicates/skips) is accounted for, even if the browser disappears.
+    expected_images: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    total_images: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    completed_images: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    succeeded_images: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    failed_images: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    skipped_images: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    faces_detected: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    # cpu, gpu, mixed, or NULL until the first worker reports its provider.
+    processor: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_activity_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    finalize_dispatched_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finalization_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    event: Mapped["Event"] = relationship()
+    created_by: Mapped[Optional["User"]] = relationship()
+    items: Mapped[List["ProcessingBatchItem"]] = relationship(
+        back_populates="batch", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        Index("ix_processing_batches_tenant_status_created", "tenant_id", "status", "created_at"),
+        Index("ix_processing_batches_event_status", "event_id", "status"),
+        CheckConstraint("total_images >= 0", name="ck_processing_batches_total_nonnegative"),
+        CheckConstraint("expected_images IS NULL OR expected_images >= 0", name="ck_processing_batches_expected_nonnegative"),
+        CheckConstraint("completed_images >= 0 AND completed_images <= total_images", name="ck_processing_batches_completed_range"),
+        CheckConstraint("succeeded_images >= 0 AND failed_images >= 0 AND skipped_images >= 0", name="ck_processing_batches_terminal_nonnegative"),
+    )
+
+
+class ProcessingBatchItem(Base):
+    __tablename__ = "processing_batch_items"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    batch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("processing_batches.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # Nullable so a Drive duplicate can retain a durable skipped item after its
+    # placeholder Photo row is removed.
+    photo_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("photos.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    filename: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    source_ref: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    status: Mapped[BatchItemStatus] = mapped_column(
+        SAEnum(BatchItemStatus, name="processing_batch_item_status"),
+        nullable=False,
+        default=BatchItemStatus.queued,
+        index=True,
+    )
+    celery_task_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    dispatch_attempted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    faces_detected: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    processing_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    processor: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    queued_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    batch: Mapped["ProcessingBatch"] = relationship(back_populates="items")
+    photo: Mapped[Optional["Photo"]] = relationship()
+
+    __table_args__ = (
+        UniqueConstraint("batch_id", "photo_id", name="uq_processing_batch_item_photo"),
+        Index("ix_processing_batch_items_batch_status", "batch_id", "status"),
+        CheckConstraint("attempt_count >= 0", name="ck_processing_batch_items_attempt_nonnegative"),
+        CheckConstraint("faces_detected >= 0", name="ck_processing_batch_items_faces_nonnegative"),
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # FaceCluster  (one row per detected person-group, per event)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -160,6 +308,8 @@ class FaceCluster(Base):
     event_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), index=True)
     # Centroid embedding stored as raw bytes (numpy float32 array serialised)
     centroid_embedding: Mapped[bytes] = mapped_column(LargeBinary)
+    # Embeddings from different model packs/configurations are incomparable.
+    pipeline_version: Mapped[str] = mapped_column(String(100), nullable=False)
     member_count: Mapped[int] = mapped_column(Integer, default=0)
     label: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)  # Admin-assigned label
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -187,11 +337,28 @@ class FaceDetection(Base):
     quality_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     # 512-dim float32 embedding serialised as bytes
     embedding: Mapped[bytes] = mapped_column(LargeBinary)
+    # Versioned identity makes task redelivery idempotent while allowing a
+    # future explicit rebuild to coexist with legacy, unversioned detections.
+    pipeline_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    face_index: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Organizer merges outlive transient cluster rows and are honored by
+    # future full reclustering passes.
+    manual_group_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), nullable=True, index=True
+    )
     is_low_quality: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     photo: Mapped["Photo"] = relationship(back_populates="face_detections")
     cluster: Mapped[Optional["FaceCluster"]] = relationship(back_populates="detections")
+
+    __table_args__ = (
+        Index(
+            "uq_face_detections_photo_pipeline_face",
+            "photo_id", "pipeline_version", "face_index",
+            unique=True,
+        ),
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -206,6 +373,7 @@ class SelfieScan(Base):
     matched_cluster_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("face_clusters.id", ondelete="SET NULL"), nullable=True)
     # Selfie embedding — deleted on erasure request
     embedding: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)
+    pipeline_version: Mapped[str] = mapped_column(String(100), nullable=False)
     match_confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     scanned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

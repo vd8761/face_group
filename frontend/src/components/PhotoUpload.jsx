@@ -1,13 +1,146 @@
-import { useRef, useState, useCallback } from 'react';
+import { useRef, useState, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Upload, CloudUpload, X, CheckCircle2, AlertCircle,
   Loader2, Image, RefreshCw, RotateCcw, FileWarning,
-  FolderOpen, Link, HardDriveDownload
+  FolderOpen, Link, HardDriveDownload, Activity
 } from 'lucide-react';
-import api from '../api/client';
+import api, { getApiErrorMessage } from '../api/client';
 
-const BATCH_SIZE = 4;
+const UPLOAD_PAGE_MAX_FILES = 2;
+const UPLOAD_PAGE_MAX_BYTES = 128 * 1024 * 1024;
+const CONCURRENCY_LIMIT = 2;
+const MAX_FILE_SIZE_MB = 100;
+const PENDING_SEAL_KEY_PREFIX = 'pg_pending_batch_seal_v1:';
+const PENDING_SEAL_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const INTERRUPTED_UPLOAD_GRACE_MS = 15 * 60 * 1000;
+const SEAL_RETRY_DELAYS_MS = [0, 1000, 3000];
+const sealRequests = new Map();
+
+function buildUploadPages(filesToUpload) {
+  const pages = [];
+  let page = [];
+  let pageBytes = 0;
+
+  filesToUpload.forEach((file) => {
+    const exceedsPageLimit = page.length > 0 && (
+      page.length >= UPLOAD_PAGE_MAX_FILES
+      || pageBytes + file.size > UPLOAD_PAGE_MAX_BYTES
+    );
+    if (exceedsPageLimit) {
+      pages.push(page);
+      page = [];
+      pageBytes = 0;
+    }
+    page.push(file);
+    pageBytes += file.size;
+  });
+
+  if (page.length) pages.push(page);
+  return pages;
+}
+
+function readPendingSeals() {
+  try {
+    const now = Date.now();
+    const entries = [];
+    const expiredKeys = [];
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (!key?.startsWith(PENDING_SEAL_KEY_PREFIX)) continue;
+      try {
+        const entry = JSON.parse(localStorage.getItem(key));
+        const isFresh = entry?.batchId
+          && entry?.eventId
+          && now - Number(entry.updatedAt || 0) < PENDING_SEAL_MAX_AGE_MS;
+        if (isFresh) entries.push(entry);
+        else expiredKeys.push(key);
+      } catch {
+        expiredKeys.push(key);
+      }
+    }
+    expiredKeys.forEach((key) => localStorage.removeItem(key));
+    return entries;
+  } catch {
+    return [];
+  }
+}
+
+function rememberPendingSeal(entry) {
+  try {
+    localStorage.setItem(
+      `${PENDING_SEAL_KEY_PREFIX}${entry.batchId}`,
+      JSON.stringify({ ...entry, updatedAt: Date.now() }),
+    );
+  } catch {
+    // Uploading still works when storage is unavailable; only crash recovery degrades.
+  }
+}
+
+function forgetPendingSeal(batchId) {
+  try {
+    localStorage.removeItem(`${PENDING_SEAL_KEY_PREFIX}${batchId}`);
+  } catch {
+    // The entry will expire naturally if browser storage cannot be updated.
+  }
+}
+
+function touchPendingSeal(batchId) {
+  try {
+    const key = `${PENDING_SEAL_KEY_PREFIX}${batchId}`;
+    const entry = JSON.parse(localStorage.getItem(key));
+    if (entry?.batchId) {
+      localStorage.setItem(key, JSON.stringify({ ...entry, updatedAt: Date.now() }));
+    }
+  } catch {
+    // Best-effort lease heartbeat; recovery still has a conservative grace period.
+  }
+}
+
+const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+const initialUploadTelemetry = {
+  activeNames: [],
+  uploadedBytes: 0,
+  totalBytes: 0,
+  speedBps: 0,
+};
+
+function formatBytes(bytes) {
+  const value = Number(bytes || 0);
+  if (value >= 1024 * 1024 * 1024) return `${(value / 1024 / 1024 / 1024).toFixed(1)} GB`;
+  if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MB`;
+  if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${value} B`;
+}
+
+function formatSpeed(bytesPerSecond) {
+  return `${formatBytes(bytesPerSecond)}/s`;
+}
+
+function sealProcessingBatch(batchId) {
+  if (sealRequests.has(batchId)) return sealRequests.get(batchId);
+
+  const request = (async () => {
+    let lastError;
+    for (const delay of SEAL_RETRY_DELAYS_MS) {
+      if (delay) await wait(delay);
+      try {
+        const { data } = await api.post(`/api/photos/batches/${batchId}/seal`, {}, { timeout: 15000 });
+        forgetPendingSeal(batchId);
+        return data;
+      } catch (error) {
+        lastError = error;
+        const status = error?.response?.status;
+        if (status === 401 || status === 403 || status === 404) break;
+      }
+    }
+    throw lastError;
+  })().finally(() => sealRequests.delete(batchId));
+
+  sealRequests.set(batchId, request);
+  return request;
+}
 
 export default function PhotoUpload({ eventId, onUploadComplete }) {
   const [uploadMode, setUploadMode]   = useState('local');   // 'local' | 'drive'
@@ -19,6 +152,11 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
   const [uploadedCount, setUploadedCount]   = useState(0);
   const [progress, setProgress]       = useState({ batchDone: 0, batchTotal: 0 });
   const [done, setDone]               = useState(false);
+  const [rejectedFiles, setRejectedFiles] = useState([]);
+  const [uploadError, setUploadError] = useState('');
+  const [batchTrackingWarning, setBatchTrackingWarning] = useState('');
+  const [activeBatchId, setActiveBatchId] = useState(null);
+  const [uploadTelemetry, setUploadTelemetry] = useState(initialUploadTelemetry);
 
   // Google Drive state
   const [driveUrl, setDriveUrl]           = useState('');
@@ -27,114 +165,241 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
   const [driveError, setDriveError]       = useState('');
 
   const inputRef = useRef(null);
+  const activeUploadBatchRef = useRef(null);
+  const pageProgressRef = useRef(new Map());
+  const completedBytesRef = useRef(0);
+  const lastUploadSampleRef = useRef({ bytes: 0, at: 0 });
+
+  useEffect(() => {
+    let disposed = false;
+    let recovering = false;
+
+    const recoverPendingSeals = async () => {
+      if (recovering) return;
+      recovering = true;
+      try {
+        if (activeUploadBatchRef.current) touchPendingSeal(activeUploadBatchRef.current);
+        const now = Date.now();
+        const pending = readPendingSeals().filter((entry) => String(entry.eventId) === String(eventId));
+        for (const entry of pending) {
+          if (entry.batchId === activeUploadBatchRef.current) continue;
+          const interruptedUploadIsRecent = entry.stage === 'uploading'
+            && now - Number(entry.updatedAt || 0) < INTERRUPTED_UPLOAD_GRACE_MS;
+          if (interruptedUploadIsRecent) continue;
+          try {
+            await sealProcessingBatch(entry.batchId);
+          } catch (error) {
+            const status = error?.response?.status;
+            if (status === 403 || status === 404) {
+              forgetPendingSeal(entry.batchId);
+              continue;
+            }
+            if (!disposed && status !== 401) {
+              setBatchTrackingWarning(
+                `${getApiErrorMessage(error, 'A previous batch is still waiting to be finalized.')} It will retry automatically.`,
+              );
+            }
+          }
+        }
+      } finally {
+        recovering = false;
+      }
+    };
+
+    recoverPendingSeals();
+    const recoveryTimer = setInterval(recoverPendingSeals, 60000);
+    window.addEventListener('online', recoverPendingSeals);
+    return () => {
+      disposed = true;
+      clearInterval(recoveryTimer);
+      window.removeEventListener('online', recoverPendingSeals);
+    };
+  }, [eventId]);
 
   /* ── file selection ── */
   const addFiles = useCallback((newFiles) => {
     const validTypes = ['image/jpeg', 'image/jpg'];
-    const filtered = Array.from(newFiles).filter(f => validTypes.includes(f.type) || f.name.toLowerCase().endsWith('.jpg') || f.name.toLowerCase().endsWith('.jpeg'));
+    const accepted = [];
+    const rejected = [];
+    Array.from(newFiles).forEach((file) => {
+      const lowerName = file.name.toLowerCase();
+      const isJpeg = validTypes.includes(file.type) || lowerName.endsWith('.jpg') || lowerName.endsWith('.jpeg');
+      if (!isJpeg) {
+        rejected.push({ name: file.name, reason: 'Only JPEG or JPG photos are supported' });
+      } else if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
+        rejected.push({ name: file.name, reason: `Larger than ${MAX_FILE_SIZE_MB} MB` });
+      } else {
+        accepted.push(file);
+      }
+    });
     setFiles(prev => {
       const existing = new Set(prev.map(f => f.name + f.size));
-      return [...prev, ...filtered.filter(f => !existing.has(f.name + f.size))];
+      return [...prev, ...accepted.filter(f => !existing.has(f.name + f.size))];
     });
+    if (rejected.length) setRejectedFiles(prev => [...prev, ...rejected]);
     setDone(false);
     setFailedFiles([]);
     setDuplicateNames([]);
+    setUploadError('');
   }, []);
 
   const removeFile = (idx) => setFiles(prev => prev.filter((_, i) => i !== idx));
   const removeFailedFile = (idx) => setFailedFiles(prev => prev.filter((_, i) => i !== idx));
 
-  /* ── image compression to prevent server OOM ── */
-  const compressImage = async (file) => {
-    return new Promise((resolve) => {
-      if (!file.type.startsWith('image/')) return resolve(file);
-      const img = new window.Image();
-      const url = URL.createObjectURL(file);
-      img.onload = () => {
-        URL.revokeObjectURL(url);
-        const MAX_SIZE = 1920;
-        let width = img.width;
-        let height = img.height;
-        if (width > height) {
-          if (width > MAX_SIZE) {
-            height = Math.round(height * (MAX_SIZE / width));
-            width = MAX_SIZE;
-          }
-        } else {
-          if (height > MAX_SIZE) {
-            width = Math.round(width * (MAX_SIZE / height));
-            height = MAX_SIZE;
-          }
-        }
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, width, height);
-        canvas.toBlob((blob) => {
-          if (!blob) return resolve(file);
-          resolve(new File([blob], file.name, {
-            type: file.type === 'image/png' ? 'image/png' : 'image/jpeg',
-            lastModified: Date.now(),
-          }));
-        }, file.type === 'image/png' ? 'image/png' : 'image/jpeg', 0.85);
-      };
-      img.onerror = () => {
-        URL.revokeObjectURL(url);
-        resolve(file);
-      };
-      img.src = url;
-    });
+  const createProcessingBatch = async (filesToUpload, source) => {
+    try {
+      const totalBytes = filesToUpload.reduce((sum, file) => sum + file.size, 0);
+      const normalizedSource = source === 'retry' ? 'retry' : 'upload';
+      const { data } = await api.post(
+        `/api/photos/events/${eventId}/batches`,
+        {
+          source: normalizedSource,
+          expected_images: filesToUpload.length,
+          total_images: filesToUpload.length,
+          total_bytes: totalBytes,
+        },
+        { timeout: 15000 },
+      );
+      const batchId = data?.batch_id || data?.id;
+      setActiveBatchId(batchId || null);
+      setBatchTrackingWarning(batchId ? '' : 'Upload will continue, but live batch tracking is unavailable.');
+      if (batchId) {
+        rememberPendingSeal({
+          batchId,
+          eventId,
+          source: normalizedSource,
+          stage: 'uploading',
+        });
+      }
+      return batchId || null;
+    } catch (error) {
+      setActiveBatchId(null);
+      const status = error?.response?.status;
+      if (status === 404 || status === 405 || status === 501) {
+        setBatchTrackingWarning('Upload will continue using server-managed pages without live batch tracking.');
+        return null;
+      }
+      throw error;
+    }
   };
 
-  const runUpload = async (filesToUpload) => {
+  const runUpload = async (filesToUpload, source = 'upload') => {
+    const uploadTotalBytes = filesToUpload.reduce((sum, file) => sum + file.size, 0);
+    pageProgressRef.current = new Map();
+    completedBytesRef.current = 0;
+    lastUploadSampleRef.current = { bytes: 0, at: performance.now() };
     setUploading(true);
     setDone(false);
+    setUploadError('');
+    setBatchTrackingWarning('');
+    setActiveBatchId(null);
+    setUploadTelemetry({
+      activeNames: [],
+      uploadedBytes: 0,
+      totalBytes: uploadTotalBytes,
+      speedBps: 0,
+    });
+    activeUploadBatchRef.current = null;
 
-    const batches = [];
-    const safeBatchSize = 4; // Upload 4 photos per batch
-    for (let i = 0; i < filesToUpload.length; i += safeBatchSize) {
-      batches.push(filesToUpload.slice(i, i + safeBatchSize));
+    let serverBatchId = null;
+    try {
+      serverBatchId = await createProcessingBatch(filesToUpload, source);
+      activeUploadBatchRef.current = serverBatchId;
+    } catch (error) {
+      setUploadError(getApiErrorMessage(error, 'Could not start this upload.'));
+      setFailedFiles(filesToUpload);
+      setUploading(false);
+      setDone(true);
+      activeUploadBatchRef.current = null;
+      return;
     }
+
+    const pages = buildUploadPages(filesToUpload);
 
     let accepted       = 0;
     let newFailed      = [];
     let allDuplicates  = [];
-    let batchesDone    = 0;
+    let pagesDone      = 0;
+    const implicitBatchIds = new Set();
 
-    setProgress({ batchDone: 0, batchTotal: batches.length });
+    setProgress({ batchDone: 0, batchTotal: pages.length });
 
-    const CONCURRENCY_LIMIT = 5; // Max 5 batches simultaneously (20 photos)
     const executing = new Set();
 
-    for (const batch of batches) {
+    for (const page of pages) {
       const promise = (async () => {
+        const pageKey = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const pageBytes = page.reduce((sum, file) => sum + file.size, 0);
+        const pageNames = page.map((file) => file.name);
+        pageProgressRef.current.set(pageKey, 0);
+        setUploadTelemetry(prev => ({
+          ...prev,
+          activeNames: pageNames,
+        }));
         try {
-          const formData = new FormData();
-          for (const f of batch) {
-              const compressed = await compressImage(f);
-              formData.append('files', compressed);
+          if (serverBatchId) {
+            rememberPendingSeal({ batchId: serverBatchId, eventId, source, stage: 'uploading' });
           }
+          const formData = new FormData();
+          for (const f of page) {
+            // Preserve the original image bytes and metadata for maximum face detail.
+            formData.append('files', f);
+          }
+          if (serverBatchId) formData.append('batch_id', serverBatchId);
 
           const { data } = await api.post(
             `/api/photos/events/${eventId}/upload`,
             formData,
-            { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 120000 }
+            {
+              headers: { 'Content-Type': 'multipart/form-data' },
+              params: serverBatchId ? { batch_id: serverBatchId } : undefined,
+              timeout: 0,
+              onUploadProgress: (event) => {
+                const loaded = Math.min(Number(event.loaded || 0), pageBytes);
+                pageProgressRef.current.set(pageKey, loaded);
+                const activeLoaded = Array.from(pageProgressRef.current.values())
+                  .reduce((sum, value) => sum + Number(value || 0), 0);
+                const totalLoaded = Math.min(uploadTotalBytes, completedBytesRef.current + activeLoaded);
+                const now = performance.now();
+                const last = lastUploadSampleRef.current;
+                const elapsedSeconds = Math.max(0.1, (now - last.at) / 1000);
+                const speedBps = Math.max(0, (totalLoaded - last.bytes) / elapsedSeconds);
+                lastUploadSampleRef.current = { bytes: totalLoaded, at: now };
+                setUploadTelemetry({
+                  activeNames: pageNames,
+                  uploadedBytes: totalLoaded,
+                  totalBytes: uploadTotalBytes,
+                  speedBps,
+                });
+              },
+            }
           );
 
           accepted       += data.accepted   || 0;
           allDuplicates   = [...allDuplicates, ...(data.duplicate_names || [])];
+          if (!serverBatchId && data?.batch_id) implicitBatchIds.add(data.batch_id);
 
-          // If entire batch was rejected (all duplicates or all format errors), don't fail it
+          // If the entire page was rejected without a reason, keep it available for retry.
           if ((data.accepted || 0) === 0 && (data.duplicates || 0) === 0 && (data.skipped_format || 0) === 0) {
-            newFailed = [...newFailed, ...batch];
+            newFailed = [...newFailed, ...page];
           }
         } catch {
-          newFailed = [...newFailed, ...batch];
+          newFailed = [...newFailed, ...page];
+        } finally {
+          const loaded = Number(pageProgressRef.current.get(pageKey) || 0);
+          completedBytesRef.current = Math.min(uploadTotalBytes, completedBytesRef.current + Math.max(pageBytes, loaded));
+          pageProgressRef.current.delete(pageKey);
+          const activeLoaded = Array.from(pageProgressRef.current.values())
+            .reduce((sum, value) => sum + Number(value || 0), 0);
+          setUploadTelemetry(prev => ({
+            ...prev,
+            activeNames: [],
+            uploadedBytes: Math.min(uploadTotalBytes, completedBytesRef.current + activeLoaded),
+          }));
         }
 
-        batchesDone++;
-        setProgress(prev => ({ ...prev, batchDone: batchesDone }));
+        pagesDone++;
+        setProgress(prev => ({ ...prev, batchDone: pagesDone }));
       })();
 
       executing.add(promise);
@@ -148,23 +413,46 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
     // Wait for all remaining batches to finish
     await Promise.all(executing);
 
+    if (serverBatchId) {
+      rememberPendingSeal({ batchId: serverBatchId, eventId, source, stage: 'ready' });
+      try {
+        await sealProcessingBatch(serverBatchId);
+      } catch (error) {
+        setBatchTrackingWarning(
+          `${getApiErrorMessage(error, 'Photos uploaded, but this batch is still waiting to be finalized.')} It will retry automatically.`,
+        );
+      }
+    }
+
+    const trackedBatchId = serverBatchId || (implicitBatchIds.size === 1 ? [...implicitBatchIds][0] : null);
+    setActiveBatchId(trackedBatchId);
+    activeUploadBatchRef.current = null;
+
     setUploadedCount(prev => prev + accepted);
     setFailedFiles(newFailed);
     setDuplicateNames(allDuplicates);
     setFiles([]);
     setUploading(false);
     setDone(true);
+    setUploadTelemetry(prev => ({
+      ...prev,
+      activeNames: [],
+      uploadedBytes: Math.max(prev.uploadedBytes, accepted > 0 ? uploadTotalBytes : prev.uploadedBytes),
+      speedBps: 0,
+    }));
 
-    if (accepted > 0) onUploadComplete?.({ accepted });
+    if (accepted > 0) onUploadComplete?.({ accepted, batchId: trackedBatchId, batch_id: trackedBatchId });
   };
 
   const handleUpload = () => { if (files.length && !uploading) runUpload(files); };
-  const handleRetry  = () => { if (failedFiles.length && !uploading) runUpload(failedFiles); };
+  const handleRetry  = () => { if (failedFiles.length && !uploading) runUpload(failedFiles, 'retry'); };
 
   const reset = () => {
-    setFiles([]); setFailedFiles([]); setDuplicateNames([]);
+    setFiles([]); setFailedFiles([]); setDuplicateNames([]); setRejectedFiles([]);
     setDone(false); setUploadedCount(0);
     setProgress({ batchDone: 0, batchTotal: 0 });
+    setUploadError(''); setBatchTrackingWarning(''); setActiveBatchId(null);
+    setUploadTelemetry(initialUploadTelemetry);
   };
 
   const pct = progress.batchTotal > 0
@@ -172,6 +460,7 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
     : 0;
 
   const totalSizeMB = files.reduce((s, f) => s + f.size, 0) / 1024 / 1024;
+  const uploadPageCount = buildUploadPages(files).length;
 
   /* ── Google Drive import handler ── */
   const handleDriveImport = async () => {
@@ -187,10 +476,11 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
       );
       setDriveResult(data);
       setDriveUrl('');
-      onUploadComplete?.({ accepted: data.queued });
+      const batchId = data?.batch_id || data?.id || null;
+      setActiveBatchId(batchId);
+      onUploadComplete?.({ accepted: data.queued, batchId, batch_id: batchId });
     } catch (err) {
-      const msg = err?.response?.data?.detail || err.message || 'Import failed';
-      setDriveError(msg);
+      setDriveError(getApiErrorMessage(err, 'Import failed'));
     } finally {
       setDriveImporting(false);
     }
@@ -224,6 +514,55 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
           >{tab.icon}{tab.label}</button>
         ))}
       </div>
+
+      {uploadMode === 'local' && uploading && (
+        <div className="card" style={{ padding: '0.9rem 1rem', borderColor: 'rgba(6,182,212,0.28)', background: 'rgba(6,182,212,0.06)' }}>
+          <div style={{ alignItems: 'center', display: 'grid', gap: '0.75rem', gridTemplateColumns: 'minmax(0, 1.5fr) repeat(3, minmax(120px, 0.55fr))' }}>
+            <div style={{ minWidth: 0 }}>
+              <div className="text-xs text-muted" style={{ alignItems: 'center', display: 'flex', gap: '0.35rem', marginBottom: 2 }}>
+                <Activity size={13} /> Currently uploading
+              </div>
+              <div className="text-sm font-semibold truncate" title={uploadTelemetry.activeNames.join(', ') || 'Preparing upload'}>
+                {uploadTelemetry.activeNames.length ? uploadTelemetry.activeNames.join(', ') : 'Preparing upload'}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs text-muted">Speed</div>
+              <div className="text-sm font-semibold">{formatSpeed(uploadTelemetry.speedBps)}</div>
+            </div>
+            <div>
+              <div className="text-xs text-muted">Uploaded</div>
+              <div className="text-sm font-semibold">
+                {formatBytes(uploadTelemetry.uploadedBytes)} / {formatBytes(uploadTelemetry.totalBytes)}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs text-muted">Page</div>
+              <div className="text-sm font-semibold">{Math.min(progress.batchDone + 1, progress.batchTotal)} of {progress.batchTotal}</div>
+            </div>
+          </div>
+          <div className="progress-bar" style={{ height: 5, marginTop: '0.75rem' }}>
+            <div
+              className="progress-bar-fill"
+              style={{
+                width: `${uploadTelemetry.totalBytes > 0 ? Math.min(100, (uploadTelemetry.uploadedBytes / uploadTelemetry.totalBytes) * 100) : 0}%`,
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {uploadError && (
+        <div style={{ alignItems: 'center', background: 'rgba(239,68,68,0.07)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 'var(--radius-md)', color: 'var(--error)', display: 'flex', fontSize: '0.82rem', gap: '0.5rem', padding: '0.75rem 1rem' }} role="alert">
+          <AlertCircle size={15} /> {uploadError}
+        </div>
+      )}
+
+      {batchTrackingWarning && (
+        <div style={{ alignItems: 'center', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.22)', borderRadius: 'var(--radius-md)', color: '#92400e', display: 'flex', fontSize: '0.78rem', gap: '0.5rem', padding: '0.7rem 1rem' }}>
+          <AlertCircle size={14} /> {batchTrackingWarning}
+        </div>
+      )}
 
       {/* ── Google Drive Import Panel ── */}
       {uploadMode === 'drive' && (
@@ -452,14 +791,33 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
             ref={inputRef} type="file" multiple
             accept="image/jpeg,image/jpg,.jpg,.jpeg"
             style={{ display: 'none' }}
-            onChange={(e) => addFiles(e.target.files)}
+            onChange={(e) => { addFiles(e.target.files); e.target.value = ''; }}
           />
           <h3 style={{ margin: '0 0 0.6rem 0', fontSize: '1.15rem', color: 'var(--text-main)', fontWeight: 700 }}>
             Drop photos here or browse
           </h3>
           <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-            JPEG / JPG only &nbsp;·&nbsp; Max 25 MB each &nbsp;·&nbsp; Batches of {BATCH_SIZE}
+            JPEG / JPG only &nbsp;·&nbsp; Max {MAX_FILE_SIZE_MB} MB each &nbsp;·&nbsp; Originals are preserved
           </p>
+        </div>
+      )}
+
+      {uploadMode === 'local' && rejectedFiles.length > 0 && (
+        <div style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.22)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+          <div style={{ alignItems: 'center', display: 'flex', justifyContent: 'space-between', padding: '0.75rem 1rem' }}>
+            <span style={{ alignItems: 'center', color: '#92400e', display: 'flex', fontSize: '0.82rem', fontWeight: 700, gap: '0.45rem' }}>
+              <FileWarning size={15} /> {rejectedFiles.length} file{rejectedFiles.length === 1 ? '' : 's'} not added
+            </span>
+            <button className="btn btn-ghost btn-sm" onClick={() => setRejectedFiles([])}><X size={12} /> Dismiss</button>
+          </div>
+          <div style={{ borderTop: '1px solid rgba(245,158,11,0.18)', maxHeight: 150, overflowY: 'auto' }}>
+            {rejectedFiles.map((item, index) => (
+              <div key={`${item.name}-${index}`} style={{ display: 'flex', fontSize: '0.75rem', gap: '0.75rem', justifyContent: 'space-between', padding: '0.5rem 1rem' }}>
+                <span className="truncate" style={{ color: 'var(--text-main)' }}>{item.name}</span>
+                <span style={{ color: '#92400e', flexShrink: 0 }}>{item.reason}</span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -531,7 +889,7 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <Loader2 size={14} color="var(--accent-light)" style={{ animation: 'spin 1s linear infinite' }} />
                 <span style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--accent-light)' }}>
-                  Uploading batch {progress.batchDone + 1} of {progress.batchTotal}…
+                  Uploading original page {Math.min(progress.batchDone + 1, progress.batchTotal)} of {progress.batchTotal}…
                 </span>
               </div>
               <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--accent-light)' }}>{pct}%</span>
@@ -544,7 +902,8 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
               />
             </div>
             <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
-              You can switch tabs, upload will continue in the background
+              Face processing starts as each page reaches the server. Interrupted batch finalization recovers automatically.
+              {activeBatchId && <> Live batch <code>{String(activeBatchId).slice(0, 8)}</code></>}
             </p>
           </motion.div>
         )}
@@ -569,7 +928,8 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
                     {uploadedCount} photo{uploadedCount !== 1 ? 's' : ''} uploaded successfully
                   </p>
                   <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                    Face processing is running in the background
+                    Face detection and People grouping are now running in the background
+                    {activeBatchId && <> · Live batch <code>{String(activeBatchId).slice(0, 8)}</code></>}
                   </p>
                 </div>
               </div>
@@ -700,7 +1060,7 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
                       {/* Per-file retry */}
                       <button
                         className="btn btn-sm"
-                        onClick={() => runUpload([f])}
+                        onClick={() => runUpload([f], 'retry')}
                         style={{
                           background: 'rgba(239,68,68,0.08)', color: 'var(--error)',
                           border: '1px solid rgba(239,68,68,0.2)',
@@ -772,7 +1132,7 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
           </button>
           {files.length > 0 && !uploading && (
             <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-              {Math.ceil(files.length / BATCH_SIZE)} batch{Math.ceil(files.length / BATCH_SIZE) !== 1 ? 'es' : ''} of {BATCH_SIZE}
+              {uploadPageCount} upload page{uploadPageCount === 1 ? '' : 's'} · up to {UPLOAD_PAGE_MAX_FILES} photos and 128 MB per page
             </span>
           )}
         </div>

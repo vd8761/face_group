@@ -8,11 +8,11 @@ AI-powered photo management for events. Organizers upload photos; attendees scan
 
 | Layer | Technology |
 |-------|-----------|
-| Frontend | React 18 + Vite (deployed on **Vercel**) |
+| Frontend | React 19 + Vite (deployed on **Vercel**) |
 | Backend API | FastAPI (Python 3.11, deployed on **Render**) |
-| ML Pipeline | InsightFace `buffalo_l` (RetinaFace + ArcFace, CPU ONNX) |
-| Clustering | HDBSCAN |
-| Database | **Neon DB** (serverless PostgreSQL + pgvector) |
+| ML Pipeline | InsightFace `buffalo_l` (RetinaFace + ArcFace, CUDA or CPU ONNX) |
+| Clustering | Event-scoped, constrained cosine grouping with same-photo safeguards |
+| Database | **Neon DB** (serverless PostgreSQL) |
 | Object Storage | **Cloudflare R2** ($0 egress) |
 | Job Queue | **Upstash Redis** + Celery |
 | Background Worker | Celery worker on **Render** |
@@ -57,7 +57,8 @@ The API will be at `http://localhost:8000`.
 
 ```bash
 cd backend
-celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+python -m app.migrate
+celery -A app.workers.celery_app worker --loglevel=info --concurrency=1 --queues=face-v2,celery
 ```
 
 ### 5. Frontend
@@ -86,6 +87,12 @@ Copy `backend/.env.example` to `backend/.env` and fill in:
 | `R2_SECRET_ACCESS_KEY` | Same as above |
 | `R2_BUCKET_NAME` | Create a bucket named `photogroup-photos` |
 | `REDIS_URL` | Upstash → Create Redis → `.env` tab (use `rediss://...`) |
+| `GOOGLE_DRIVE_API_KEY` | Optional Google Cloud API key for public Drive-folder imports |
+
+The face model is deliberately pinned to `buffalo_l`. If the model or pipeline
+version changes, reprocess existing originals before comparing embeddings; two
+different model packs can both produce 512-value vectors that are not mutually
+compatible.
 
 ---
 
@@ -142,16 +149,31 @@ POST /api/events/                       # [organizer] Create event
 GET  /api/events/{id}                   # [organizer] Event detail
 
 POST /api/photos/events/{id}/upload     # [organizer] Bulk photo upload (async)
+POST /api/photos/events/{id}/batches    # [organizer] Start one durable upload batch
+POST /api/photos/batches/{id}/seal      # [organizer] Close upload intake for a batch
+POST /api/photos/events/{id}/reprocess-faces # [organizer] Re-embed all originals safely
 GET  /api/photos/events/{id}            # [organizer] List photos + status
+
+GET  /api/processing/snapshot           # [organizer/admin] Scoped live-processing snapshot
+WS   /api/processing/ws                 # [organizer/admin] 1-second progress/resource stream
 
 POST /api/faces/consent                 # [attendee] Record biometric consent
 POST /api/faces/events/{id}/scan        # [attendee] Selfie scan → matched photos
 DELETE /api/faces/scans/{scan_id}       # [attendee] Erase selfie data (GDPR)
 GET  /api/faces/events/{id}/clusters    # [organizer] List face clusters
+PATCH /api/faces/events/{id}/clusters/{cluster_id} # [organizer] Name a person
 POST /api/faces/clusters/merge          # [organizer] Merge two clusters
+POST /api/faces/events/{id}/recluster   # [organizer] Rebuild constrained People groups
 
 POST /api/downloads/zip                 # [attendee] Stream ZIP of selected photos
 ```
+
+The WebSocket expects `{ "type": "auth", "token": "<JWT>" }` as its first
+message. Organizers receive only their organization’s running batches; super
+admins receive platform totals. CPU is application process-tree utilization.
+GPU utilization is device-wide and is reported as unavailable when NVML or a
+GPU worker is not present. PostgreSQL owns exact counts; Redis is used only for
+short rolling throughput windows and expiring worker heartbeats.
 
 ---
 

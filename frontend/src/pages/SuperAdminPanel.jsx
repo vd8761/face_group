@@ -1,16 +1,19 @@
 import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Shield, Building2, Plus, Trash2, Power, CreditCard,
-  BarChart3, Users, Image, HardDrive, Search, X, Loader2,
-  ChevronDown, ChevronUp, FileText
+  Shield, Building2, Plus, Trash2, Power,
+  Users, Image, HardDrive, Search, X, Loader2,
+  FileText, Activity
 } from 'lucide-react';
 import api from '../api/client';
+import { isRunningBatch, useProcessing } from '../context/ProcessingContext';
+import ProcessingOverview from '../components/processing/ProcessingOverview';
 
 const PLAN_OPTIONS = ['starter', 'pro', 'enterprise'];
 const PLAN_COLORS  = { starter: 'var(--text-muted)', pro: 'var(--accent-light)', enterprise: 'var(--accent2)' };
 
 export default function SuperAdminPanel() {
+  const processing = useProcessing();
   const [stats, setStats]   = useState(null);
   const [tenants, setTenants] = useState([]);
   const [auditLogs, setAuditLogs] = useState([]);
@@ -80,6 +83,12 @@ export default function SuperAdminPanel() {
     return `${(b/1024).toFixed(0)} KB`;
   };
 
+  const platformBatches = [...processing.batches].sort((a, b) => {
+    const activeDifference = Number(isRunningBatch(b)) - Number(isRunningBatch(a));
+    if (activeDifference) return activeDifference;
+    return new Date(b.updated_at || b.started_at || 0) - new Date(a.updated_at || a.started_at || 0);
+  });
+
   return (
     <div className="page">
       <div className="container">
@@ -101,12 +110,13 @@ export default function SuperAdminPanel() {
 
         {/* Stats row */}
         {stats && (
-          <div className="grid-4 mb-8" style={{ gap: '1rem' }}>
+          <div className="grid-4 mb-8" style={{ gap: '1rem', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
             {[
               { icon: Building2, label: 'Total Orgs',   value: stats.total_tenants,   sub: `${stats.active_tenants} active` },
               { icon: Users,     label: 'Events',        value: stats.total_events },
               { icon: Image,     label: 'Photos',        value: stats.total_photos.toLocaleString() },
               { icon: HardDrive, label: 'Storage Used',  value: fmtBytes(stats.total_storage_bytes) },
+              { icon: Activity,  label: 'Processing Queue', value: processing.hasSnapshot ? processing.summary.remaining_images.toLocaleString() : stats.processing_queue_depth, sub: processing.hasSnapshot ? `${processing.summary.running_batches} batches running` : 'Queued and active' },
             ].map(({ icon: Icon, label, value, sub }) => (
               <div key={label} className="stat-card">
                 <div className="flex items-center gap-2 text-muted mb-1">
@@ -119,6 +129,21 @@ export default function SuperAdminPanel() {
             ))}
           </div>
         )}
+
+        <div className="mb-8">
+          <ProcessingOverview
+            title="Platform processing"
+            subtitle="Totals across all organizations and active processing workers"
+            summary={processing.summary}
+            resources={processing.resources}
+            batches={platformBatches}
+            connectionState={processing.connectionState}
+            isStale={processing.isStale}
+            hasSnapshot={processing.hasSnapshot}
+            error={processing.error}
+            batchLimit={8}
+          />
+        </div>
 
         {/* Tab bar */}
         <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem', borderBottom: '1px solid var(--color-border)', paddingBottom: '0' }}>
@@ -153,7 +178,11 @@ export default function SuperAdminPanel() {
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
-                {filtered.map((tenant) => (
+                {filtered.map((tenant) => {
+                  const tenantRunningBatches = platformBatches.filter(
+                    (batch) => String(batch.tenant_id || batch.organization_id || '') === String(tenant.id) && isRunningBatch(batch),
+                  );
+                  return (
                   <motion.div
                     key={tenant.id}
                     className="card"
@@ -172,6 +201,9 @@ export default function SuperAdminPanel() {
                             <span className={`badge ${tenant.is_active ? 'badge-active' : 'badge-failed'}`}>
                               {tenant.is_active ? 'Active' : 'Suspended'}
                             </span>
+                            {tenantRunningBatches.length > 0 && (
+                              <span className="badge badge-processing">{tenantRunningBatches.length} processing</span>
+                            )}
                           </div>
                           <div className="text-xs text-muted">{tenant.slug} · {tenant.event_count} events · {tenant.photo_count} photos · {tenant.storage_used_gb} GB</div>
                         </div>
@@ -214,7 +246,8 @@ export default function SuperAdminPanel() {
                       </div>
                     )}
                   </motion.div>
-                ))}
+                  );
+                })}
                 {filtered.length === 0 && (
                   <div className="text-center" style={{ padding: '3rem', color: 'var(--text-muted)' }}>No organizations found</div>
                 )}
