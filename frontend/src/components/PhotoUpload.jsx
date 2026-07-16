@@ -99,6 +99,17 @@ function touchPendingSeal(batchId) {
 
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
+const fileKey = (file) => `${file.name}::${file.size}`;
+
+// Client-side pipeline steps for one file. Once the file is accepted by the
+// server it continues as a Photo row: P: Queued → Processing → Processed.
+const FILE_STAGES = {
+  u_queued: { label: 'U: Queued', title: 'Upload is queued' },
+  uploading: { label: 'Uploading', title: 'Uploading to server' },
+  p_queued: { label: 'Uploaded · P: Queued', title: 'Uploaded — face processing queued' },
+  failed: { label: 'Upload failed', title: 'This file did not reach the server' },
+};
+
 const initialUploadTelemetry = {
   activeNames: [],
   uploadedBytes: 0,
@@ -157,6 +168,8 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
   const [batchTrackingWarning, setBatchTrackingWarning] = useState('');
   const [activeBatchId, setActiveBatchId] = useState(null);
   const [uploadTelemetry, setUploadTelemetry] = useState(initialUploadTelemetry);
+  // fileKey -> 'u_queued' | 'uploading' | 'p_queued' | 'failed'
+  const [fileStages, setFileStages] = useState({});
 
   // Google Drive state
   const [driveUrl, setDriveUrl]           = useState('');
@@ -283,11 +296,20 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
     }
   };
 
+  const setStageForFiles = (pageFiles, stage) => {
+    setFileStages((prev) => {
+      const next = { ...prev };
+      pageFiles.forEach((file) => { next[fileKey(file)] = stage; });
+      return next;
+    });
+  };
+
   const runUpload = async (filesToUpload, source = 'upload') => {
     const uploadTotalBytes = filesToUpload.reduce((sum, file) => sum + file.size, 0);
     pageProgressRef.current = new Map();
     completedBytesRef.current = 0;
     lastUploadSampleRef.current = { bytes: 0, at: performance.now() };
+    setFileStages(Object.fromEntries(filesToUpload.map((file) => [fileKey(file), 'u_queued'])));
     setUploading(true);
     setDone(false);
     setUploadError('');
@@ -331,6 +353,7 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
         const pageKey = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
         const pageBytes = page.reduce((sum, file) => sum + file.size, 0);
         const pageNames = page.map((file) => file.name);
+        setStageForFiles(page, 'uploading');
         pageProgressRef.current.set(pageKey, 0);
         setUploadTelemetry(prev => ({
           ...prev,
@@ -382,9 +405,13 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
           // If the entire page was rejected without a reason, keep it available for retry.
           if ((data.accepted || 0) === 0 && (data.duplicates || 0) === 0 && (data.skipped_format || 0) === 0) {
             newFailed = [...newFailed, ...page];
+            setStageForFiles(page, 'failed');
+          } else {
+            setStageForFiles(page, 'p_queued');
           }
         } catch {
           newFailed = [...newFailed, ...page];
+          setStageForFiles(page, 'failed');
         } finally {
           const loaded = Number(pageProgressRef.current.get(pageKey) || 0);
           completedBytesRef.current = Math.min(uploadTotalBytes, completedBytesRef.current + Math.max(pageBytes, loaded));
@@ -453,6 +480,7 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
     setProgress({ batchDone: 0, batchTotal: 0 });
     setUploadError(''); setBatchTrackingWarning(''); setActiveBatchId(null);
     setUploadTelemetry(initialUploadTelemetry);
+    setFileStages({});
   };
 
   const pct = progress.batchTotal > 0
@@ -548,6 +576,34 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
                 width: `${uploadTelemetry.totalBytes > 0 ? Math.min(100, (uploadTelemetry.uploadedBytes / uploadTelemetry.totalBytes) * 100) : 0}%`,
               }}
             />
+          </div>
+        </div>
+      )}
+
+      {/* ── Per-file pipeline stages (U: Queued → Uploading → Uploaded · P: Queued) ── */}
+      {uploadMode === 'local' && Object.keys(fileStages).length > 0 && (uploading || done) && (
+        <div style={{ background: '#fff', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
+          <div style={{ alignItems: 'center', background: 'var(--color-surface-2)', borderBottom: '1px solid var(--color-border)', display: 'flex', gap: '0.5rem', justifyContent: 'space-between', padding: '0.65rem 1rem' }}>
+            <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Upload pipeline</span>
+            <span className="text-xs text-muted">
+              U = upload · P = processing. Processing continues in the Photos tab
+              (P: Queued → Processing → Processed).
+            </span>
+          </div>
+          <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+            {Object.entries(fileStages).map(([key, stage]) => {
+              const name = key.slice(0, key.lastIndexOf('::'));
+              const meta = FILE_STAGES[stage] || FILE_STAGES.u_queued;
+              return (
+                <div key={key} style={{ alignItems: 'center', borderBottom: '1px solid var(--color-border)', display: 'flex', gap: '0.75rem', justifyContent: 'space-between', padding: '0.45rem 1rem' }}>
+                  <span className="truncate" style={{ flex: 1, fontSize: '0.8rem', minWidth: 0 }} title={name}>{name}</span>
+                  <span className={`upload-stage-chip upload-stage-${stage}`} title={meta.title}>
+                    {stage === 'uploading' && <Loader2 size={11} className="spin" style={{ animation: 'spin 1s linear infinite' }} />}
+                    {meta.label}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

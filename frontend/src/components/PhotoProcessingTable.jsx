@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Ban, ChevronLeft, ChevronRight, Eye, Loader2, Play, RefreshCw,
-  Search, Trash2, Upload, X
+  ScanFace, Search, Trash2, Upload, X
 } from 'lucide-react';
 import api, { getApiErrorMessage } from '../api/client';
+import { photoStage } from '../lib/statusSteps';
 
 const STATUS_OPTIONS = [
   { value: 'all', label: 'All statuses' },
-  { value: 'queued', label: 'Queued' },
+  { value: 'queued', label: 'Queued (U/P)' },
   { value: 'processing', label: 'Processing' },
   { value: 'failed', label: 'Failed' },
-  { value: 'done', label: 'Done' },
+  { value: 'done', label: 'Processed' },
 ];
 
 function formatBytes(bytes) {
@@ -21,14 +22,95 @@ function formatBytes(bytes) {
   return `${value} B`;
 }
 
-function StatusBadge({ status }) {
-  const labels = {
-    queued: 'Queued',
-    processing: 'Processing',
-    done: 'Done',
-    failed: 'Failed',
-  };
-  return <span className={`badge badge-${status || 'queued'}`}>{labels[status] || status || 'Queued'}</span>;
+function StatusBadge({ photo }) {
+  const stage = photoStage(photo);
+  return <span className={`badge ${stage.cls}`} title={stage.title}>{stage.label}</span>;
+}
+
+// Preview image with face bounding boxes; each box shows the person's name
+// above it on hover. Boxes use percentage offsets against the image's natural
+// dimensions, so they track the rendered size automatically.
+function FaceOverlayImage({ photo }) {
+  const [faces, setFaces] = useState([]);
+  const [natural, setNatural] = useState(null);
+  const [showBoxes, setShowBoxes] = useState(true);
+  const [facesError, setFacesError] = useState('');
+  const src = photo.preview_url || photo.thumbnail_url;
+
+  useEffect(() => {
+    let cancelled = false;
+    setFaces([]);
+    setNatural(null);
+    setFacesError('');
+    if (photo.status !== 'done') return undefined;
+    (async () => {
+      try {
+        const { data } = await api.get(`/api/photos/${photo.id}/faces`);
+        if (!cancelled) setFaces(data.faces || []);
+      } catch (err) {
+        if (!cancelled) setFacesError(getApiErrorMessage(err, 'Could not load detected faces.'));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [photo.id, photo.status]);
+
+  const personName = (face, index) => face.person_label
+    || (face.cluster_id ? `Person ${face.cluster_id.slice(0, 4)}` : `Face ${index + 1}`);
+
+  const boxes = natural && showBoxes ? faces.map((face, index) => {
+    const { x1, y1, x2, y2 } = face.bbox || {};
+    const width = Math.max(0, (x2 - x1) / natural.width) * 100;
+    const height = Math.max(0, (y2 - y1) / natural.height) * 100;
+    if (!width || !height) return null;
+    return (
+      <div
+        key={face.id}
+        className={`face-box${face.is_low_quality ? ' face-box-lowq' : ''}`}
+        style={{
+          left: `${(x1 / natural.width) * 100}%`,
+          top: `${(y1 / natural.height) * 100}%`,
+          width: `${width}%`,
+          height: `${height}%`,
+        }}
+      >
+        <span className="face-box-name">
+          {personName(face, index)}
+          {face.is_low_quality ? ' · low quality' : ''}
+        </span>
+      </div>
+    );
+  }) : null;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem', maxWidth: '100%' }}>
+      <div className="face-overlay-wrap">
+        <img
+          src={src}
+          alt={photo.filename}
+          onLoad={(event) => setNatural({
+            width: event.target.naturalWidth || 1,
+            height: event.target.naturalHeight || 1,
+          })}
+        />
+        {boxes}
+      </div>
+      <div style={{ alignItems: 'center', display: 'flex', gap: '0.75rem', flexWrap: 'wrap', justifyContent: 'center' }}>
+        {photo.status === 'done' && (
+          <button
+            className="btn btn-ghost btn-sm face-overlay-toggle"
+            onClick={() => setShowBoxes((value) => !value)}
+            disabled={!faces.length}
+          >
+            <ScanFace size={13} />
+            {faces.length
+              ? `${showBoxes ? 'Hide' : 'Show'} ${faces.length} face${faces.length === 1 ? '' : 's'}`
+              : 'No faces detected'}
+          </button>
+        )}
+        {facesError && <span className="text-xs" style={{ color: 'var(--error)' }}>{facesError}</span>}
+      </div>
+    </div>
+  );
 }
 
 export default function PhotoProcessingTable({
@@ -221,7 +303,7 @@ export default function PhotoProcessingTable({
                       {photo.error_message && <small title={photo.error_message}>{photo.error_message}</small>}
                     </div>
                   </td>
-                  <td><StatusBadge status={photo.status} /></td>
+                  <td><StatusBadge photo={photo} /></td>
                   <td>{Number(photo.face_count || 0)}</td>
                   <td>{formatBytes(photo.original_size_bytes)}</td>
                   <td>{new Date(photo.uploaded_at).toLocaleString()}</td>
@@ -273,7 +355,7 @@ export default function PhotoProcessingTable({
             </div>
             <div className="photo-preview-body">
               {preview.preview_url || preview.thumbnail_url ? (
-                <img src={preview.preview_url || preview.thumbnail_url} alt={preview.filename} />
+                <FaceOverlayImage photo={preview} />
               ) : (
                 <div className="photo-table-empty">Preview unavailable</div>
               )}

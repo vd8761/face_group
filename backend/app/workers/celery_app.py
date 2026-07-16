@@ -21,6 +21,10 @@ ssl_conf = {"ssl_cert_reqs": ssl.CERT_NONE} if settings.REDIS_URL and settings.R
 celery_app.conf.update(
     broker_use_ssl=ssl_conf,
     redis_backend_use_ssl=ssl_conf,
+    # The durable dispatcher publishes to this queue explicitly. Making it the
+    # default means a bare `celery worker` (no -Q flag) still consumes it and
+    # unrouted legacy publishes land where workers are listening.
+    task_default_queue="face-v2",
     broker_connection_timeout=3.0,
     broker_connection_retry=True,
     broker_connection_retry_on_startup=True,

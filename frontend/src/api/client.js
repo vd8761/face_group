@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { reportError } from '../lib/errorBus';
 
 export const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -50,15 +51,29 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// Handle 401, clear token and redirect to login
+// Handle 401, clear token and redirect to login.
+// Every other failed request is surfaced in the ErrorCenter UI.
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
+    const status = error.response?.status;
+    if (status === 401) {
       localStorage.removeItem('pg_token');
       localStorage.removeItem('pg_user');
       window.location.href = '/login';
+      return Promise.reject(error);
     }
+
+    const method = (error.config?.method || 'GET').toUpperCase();
+    const url = error.config?.url || '';
+    const detail = status
+      ? `${method} ${url} → HTTP ${status}`
+      : `${method} ${url} → ${error.code || 'network error'}`;
+    reportError(getApiErrorMessage(error, 'Request failed'), {
+      source: 'api',
+      status: status ?? null,
+      detail,
+    });
     return Promise.reject(error);
   }
 );
