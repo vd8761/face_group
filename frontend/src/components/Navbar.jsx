@@ -44,7 +44,7 @@ export default function Navbar() {
               style={{ color: 'var(--teal-dark)', fontWeight: 600 }}
             >
               <Scan size={14} />
-              Find My Photos
+              <span className="hide-on-mobile">Find My Photos</span>
             </button>
           </Link>
         )}
@@ -118,7 +118,8 @@ export default function Navbar() {
                 boxShadow: scrolled && isPublicPage ? 'var(--shadow-glow)' : 'none',
               }}
             >
-              Organizer Sign In
+              <span className="hide-on-mobile">Organizer Sign In</span>
+              <span style={{ display: 'none' }} className="mobile-only-inline">Sign In</span>
             </button>
           </Link>
         )}

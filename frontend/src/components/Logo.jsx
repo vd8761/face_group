@@ -1,12 +1,15 @@
 export default function Logo({ light = false, style = {}, size = 'md', align = 'left' }) {
   const heights = { sm: 36, md: 48, lg: 64 };
-  const h = heights[size] || heights.md;
+  const baseH = heights[size] || heights.md;
+  // Previously we used transform: scale(1.8), which didn't affect DOM width and caused overlaps.
+  // Now we just multiply the height directly.
+  const h = baseH * 1.8;
   
   return (
     <div style={{ 
       display: 'inline-flex', 
       alignItems: 'center',
-      justifyContent: 'center',
+      justifyContent: align === 'center' ? 'center' : 'flex-start',
       height: h, 
       ...style 
     }}>
@@ -17,8 +20,6 @@ export default function Logo({ light = false, style = {}, size = 'md', align = '
           display: 'block',
           height: h, 
           width: 'auto',
-          transform: 'scale(1.8)',
-          transformOrigin: align === 'center' ? 'center center' : 'left center',
           filter: light ? 'brightness(0) invert(1)' : 'none',
           mixBlendMode: light ? 'screen' : 'multiply',
           transition: 'filter 0.2s',
