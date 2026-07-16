@@ -18,12 +18,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Pre-download InsightFace buffalo_l model at build time
 # so first request does not trigger a 500MB download
 # NOTE: Requires a build instance with enough RAM (at least 4GB for safe compilation)
-RUN python -c "\
-import os; \
-os.environ['INSIGHTFACE_HOME'] = '/tmp/insightface_cache'; \
-from insightface.app import FaceAnalysis; \
-app = FaceAnalysis(name='buffalo_l', root='/tmp/insightface_cache', providers=['CPUExecutionProvider']); \
-app.prepare(ctx_id=-1, det_thresh=0.60, det_size=(1024,1024))"
+RUN python -c "import os; os.environ['INSIGHTFACE_HOME']='/tmp/insightface_cache'; from insightface.app import FaceAnalysis; app=FaceAnalysis(name='buffalo_l', root='/tmp/insightface_cache', providers=['CPUExecutionProvider']); app.prepare(ctx_id=-1, det_thresh=0.60, det_size=(1024,1024))"
 
 COPY . .
 
