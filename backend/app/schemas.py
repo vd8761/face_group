@@ -136,6 +136,9 @@ class PhotoResponse(BaseModel):
     error_message: Optional[str]
     uploaded_at: datetime
     thumbnail_url: Optional[str] = None
+    preview_url: Optional[str] = None
+    original_size_bytes: int = 0
+    face_count: int = 0
 
     class Config:
         from_attributes = True

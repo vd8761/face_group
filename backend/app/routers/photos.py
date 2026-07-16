@@ -11,7 +11,7 @@ import time
 from typing import Dict, List, Literal, Optional
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status, BackgroundTasks, Query
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import delete, func, select, update
@@ -813,26 +813,41 @@ async def list_event_photos(
     event_id: uuid.UUID,
     current_user: User = Depends(require_organizer),
     db: AsyncSession = Depends(get_db),
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=200),
+    status_filter: Literal["all", "queued", "processing", "done", "failed"] = "all",
+    q: Optional[str] = Query(default=None, max_length=120),
 ):
     await _get_event_or_404(event_id, current_user.tenant_id, db)
 
+    filters = [Photo.event_id == event_id]
+    if status_filter != "all":
+        filters.append(Photo.status == PhotoStatus(status_filter))
+    if q and q.strip():
+        filters.append(Photo.filename.ilike(f"%{q.strip()}%"))
+
     total = (await db.execute(
-        select(func.count(Photo.id)).where(Photo.event_id == event_id)
+        select(func.count(Photo.id)).where(*filters)
     )).scalar()
 
+    face_counts = (
+        select(FaceDetection.photo_id, func.count(FaceDetection.id).label("face_count"))
+        .group_by(FaceDetection.photo_id)
+        .subquery()
+    )
     result = await db.execute(
-        select(Photo)
-        .where(Photo.event_id == event_id)
+        select(Photo, func.coalesce(face_counts.c.face_count, 0))
+        .outerjoin(face_counts, face_counts.c.photo_id == Photo.id)
+        .where(*filters)
         .order_by(Photo.uploaded_at.desc())
         .offset(skip).limit(limit)
     )
-    photos = result.scalars().all()
+    rows = result.all()
 
     out = []
-    for p in photos:
+    for p, face_count in rows:
         thumb_url = generate_presigned_url(p.thumbnail_key, expires_in=3600) if p.thumbnail_key else None
+        preview_url = generate_presigned_url(p.original_key, expires_in=1800) if p.original_key else thumb_url
         out.append(PhotoResponse(
             id=p.id,
             filename=p.filename,
@@ -840,9 +855,192 @@ async def list_event_photos(
             error_message=p.error_message,
             uploaded_at=p.uploaded_at,
             thumbnail_url=thumb_url,
+            preview_url=preview_url,
+            original_size_bytes=p.original_size_bytes or 0,
+            face_count=int(face_count or 0),
         ))
 
     return PhotoListResponse(photos=out, total=total)
+
+
+async def _get_photo_for_organizer(
+    photo_id: uuid.UUID,
+    current_user: User,
+    db: AsyncSession,
+) -> Photo:
+    photo = (await db.execute(
+        select(Photo).where(
+            Photo.id == photo_id,
+            Photo.tenant_id == current_user.tenant_id,
+        )
+    )).scalar_one_or_none()
+    if not photo:
+        raise HTTPException(status_code=404, detail="Photo not found")
+    return photo
+
+
+@router.post("/{photo_id}/process-now", status_code=202)
+async def process_photo_now(
+    photo_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(require_organizer),
+    db: AsyncSession = Depends(get_db),
+):
+    photo = await _get_photo_for_organizer(photo_id, current_user, db)
+    if not photo.original_key:
+        raise HTTPException(
+            status_code=409,
+            detail="This photo does not have a stored original yet. Re-import or upload it again.",
+        )
+
+    await lock_event_face_mutation(photo.event_id, db)
+    active_rows = (await db.execute(
+        select(ProcessingBatchItem, ProcessingBatch)
+        .join(ProcessingBatch, ProcessingBatch.id == ProcessingBatchItem.batch_id)
+        .where(
+            ProcessingBatchItem.photo_id == photo.id,
+            ProcessingBatchItem.status.notin_(TERMINAL_ITEM_STATUSES),
+            ProcessingBatch.status.in_([
+                BatchStatus.receiving,
+                BatchStatus.queued,
+                BatchStatus.running,
+                BatchStatus.finalizing,
+            ]),
+        )
+        .order_by(ProcessingBatchItem.queued_at.desc())
+    )).all()
+
+    dispatch_items: List[tuple[str, str]] = []
+    if active_rows:
+        for item, _batch in active_rows:
+            if item.status == BatchItemStatus.queued:
+                dispatch_items.append((str(photo.id), str(item.id)))
+        if photo.status != PhotoStatus.processing:
+            photo.status = PhotoStatus.queued
+            photo.error_message = None
+        message = (
+            "Photo is already processing."
+            if not dispatch_items and photo.status == PhotoStatus.processing
+            else "Queued photo was dispatched for processing."
+        )
+    else:
+        photo.status = PhotoStatus.queued
+        photo.error_message = None
+        processing_batch = await create_batch(
+            db,
+            tenant_id=photo.tenant_id,
+            event_id=photo.event_id,
+            created_by_user_id=current_user.id,
+            source=BatchSource.retry,
+            expected_images=1,
+        )
+        item = await append_item(
+            db,
+            batch_id=processing_batch.id,
+            photo_id=photo.id,
+            filename=photo.filename,
+        )
+        processing_batch = await seal_batch(
+            db,
+            batch_id=processing_batch.id,
+            tenant_id=photo.tenant_id,
+            event_id=photo.event_id,
+        )
+        dispatch_items.append((str(photo.id), str(item.id)))
+        message = "Photo was queued for processing."
+
+    await db.commit()
+    if dispatch_items:
+        await _dispatch_batch_items(
+            items=dispatch_items,
+            event=None,
+            background_tasks=background_tasks,
+        )
+    return {"message": message, "dispatched": len(dispatch_items)}
+
+
+@router.post("/{photo_id}/cancel", response_model=MessageResponse)
+async def cancel_photo_processing(
+    photo_id: uuid.UUID,
+    current_user: User = Depends(require_organizer),
+    db: AsyncSession = Depends(get_db),
+):
+    photo = await _get_photo_for_organizer(photo_id, current_user, db)
+    if photo.status not in (PhotoStatus.queued, PhotoStatus.processing):
+        return MessageResponse(message="Photo is not queued or processing.")
+
+    await lock_event_face_mutation(photo.event_id, db)
+    active_items = (await db.execute(
+        select(ProcessingBatchItem).where(
+            ProcessingBatchItem.photo_id == photo.id,
+            ProcessingBatchItem.status.notin_(TERMINAL_ITEM_STATUSES),
+        )
+    )).scalars().all()
+    batch_finalizing = False
+    for item in active_items:
+        transition = await mark_item_terminal(
+            db,
+            item_id=item.id,
+            status=BatchItemStatus.cancelled,
+            error_message="Cancelled by organizer",
+        )
+        batch_finalizing = batch_finalizing or transition.batch_finalizing
+    photo.status = PhotoStatus.failed
+    photo.error_message = "Cancelled by organizer"
+    await db.commit()
+    if batch_finalizing:
+        await _schedule_recluster_if_idle(photo.event_id)
+    return MessageResponse(message="Photo processing cancelled.")
+
+
+@router.delete("/{photo_id}", response_model=MessageResponse)
+async def remove_photo(
+    photo_id: uuid.UUID,
+    current_user: User = Depends(require_organizer),
+    db: AsyncSession = Depends(get_db),
+):
+    photo = await _get_photo_for_organizer(photo_id, current_user, db)
+    event_id = photo.event_id
+    await lock_event_face_mutation(photo.event_id, db)
+
+    from ..services.storage_cleanup import collect_photo_assets
+
+    asset_keys, deleted_bytes = await collect_photo_assets(db, [photo])
+    active_items = (await db.execute(
+        select(ProcessingBatchItem).where(
+            ProcessingBatchItem.photo_id == photo.id,
+            ProcessingBatchItem.status.notin_(TERMINAL_ITEM_STATUSES),
+        )
+    )).scalars().all()
+    batch_finalizing = False
+    for item in active_items:
+        transition = await mark_item_terminal(
+            db,
+            item_id=item.id,
+            status=BatchItemStatus.cancelled,
+            error_message="Photo removed by organizer",
+        )
+        batch_finalizing = batch_finalizing or transition.batch_finalizing
+
+    if deleted_bytes:
+        sub_result = await db.execute(
+            select(Subscription).where(Subscription.tenant_id == current_user.tenant_id)
+        )
+        sub = sub_result.scalar_one_or_none()
+        if sub:
+            sub.current_storage_bytes = max(
+                0,
+                (sub.current_storage_bytes or 0) - deleted_bytes,
+            )
+    await db.delete(photo)
+    await db.commit()
+    try:
+        await run_in_threadpool(delete_objects, asset_keys)
+    except Exception as cleanup_error:
+        print(f"Deferred storage cleanup failed: {cleanup_error}")
+    if batch_finalizing:
+        await _schedule_recluster_if_idle(event_id)
+    return MessageResponse(message="Photo removed.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

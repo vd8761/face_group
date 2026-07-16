@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Upload, CloudUpload, X, CheckCircle2, AlertCircle,
   Loader2, Image, RefreshCw, RotateCcw, FileWarning,
-  FolderOpen, Link, HardDriveDownload
+  FolderOpen, Link, HardDriveDownload, Activity
 } from 'lucide-react';
 import api, { getApiErrorMessage } from '../api/client';
 
@@ -99,6 +99,25 @@ function touchPendingSeal(batchId) {
 
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
+const initialUploadTelemetry = {
+  activeNames: [],
+  uploadedBytes: 0,
+  totalBytes: 0,
+  speedBps: 0,
+};
+
+function formatBytes(bytes) {
+  const value = Number(bytes || 0);
+  if (value >= 1024 * 1024 * 1024) return `${(value / 1024 / 1024 / 1024).toFixed(1)} GB`;
+  if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MB`;
+  if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${value} B`;
+}
+
+function formatSpeed(bytesPerSecond) {
+  return `${formatBytes(bytesPerSecond)}/s`;
+}
+
 function sealProcessingBatch(batchId) {
   if (sealRequests.has(batchId)) return sealRequests.get(batchId);
 
@@ -137,6 +156,7 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
   const [uploadError, setUploadError] = useState('');
   const [batchTrackingWarning, setBatchTrackingWarning] = useState('');
   const [activeBatchId, setActiveBatchId] = useState(null);
+  const [uploadTelemetry, setUploadTelemetry] = useState(initialUploadTelemetry);
 
   // Google Drive state
   const [driveUrl, setDriveUrl]           = useState('');
@@ -146,6 +166,9 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
 
   const inputRef = useRef(null);
   const activeUploadBatchRef = useRef(null);
+  const pageProgressRef = useRef(new Map());
+  const completedBytesRef = useRef(0);
+  const lastUploadSampleRef = useRef({ bytes: 0, at: 0 });
 
   useEffect(() => {
     let disposed = false;
@@ -261,11 +284,21 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
   };
 
   const runUpload = async (filesToUpload, source = 'upload') => {
+    const uploadTotalBytes = filesToUpload.reduce((sum, file) => sum + file.size, 0);
+    pageProgressRef.current = new Map();
+    completedBytesRef.current = 0;
+    lastUploadSampleRef.current = { bytes: 0, at: performance.now() };
     setUploading(true);
     setDone(false);
     setUploadError('');
     setBatchTrackingWarning('');
     setActiveBatchId(null);
+    setUploadTelemetry({
+      activeNames: [],
+      uploadedBytes: 0,
+      totalBytes: uploadTotalBytes,
+      speedBps: 0,
+    });
     activeUploadBatchRef.current = null;
 
     let serverBatchId = null;
@@ -295,6 +328,14 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
 
     for (const page of pages) {
       const promise = (async () => {
+        const pageKey = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const pageBytes = page.reduce((sum, file) => sum + file.size, 0);
+        const pageNames = page.map((file) => file.name);
+        pageProgressRef.current.set(pageKey, 0);
+        setUploadTelemetry(prev => ({
+          ...prev,
+          activeNames: pageNames,
+        }));
         try {
           if (serverBatchId) {
             rememberPendingSeal({ batchId: serverBatchId, eventId, source, stage: 'uploading' });
@@ -313,6 +354,24 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
               headers: { 'Content-Type': 'multipart/form-data' },
               params: serverBatchId ? { batch_id: serverBatchId } : undefined,
               timeout: 0,
+              onUploadProgress: (event) => {
+                const loaded = Math.min(Number(event.loaded || 0), pageBytes);
+                pageProgressRef.current.set(pageKey, loaded);
+                const activeLoaded = Array.from(pageProgressRef.current.values())
+                  .reduce((sum, value) => sum + Number(value || 0), 0);
+                const totalLoaded = Math.min(uploadTotalBytes, completedBytesRef.current + activeLoaded);
+                const now = performance.now();
+                const last = lastUploadSampleRef.current;
+                const elapsedSeconds = Math.max(0.1, (now - last.at) / 1000);
+                const speedBps = Math.max(0, (totalLoaded - last.bytes) / elapsedSeconds);
+                lastUploadSampleRef.current = { bytes: totalLoaded, at: now };
+                setUploadTelemetry({
+                  activeNames: pageNames,
+                  uploadedBytes: totalLoaded,
+                  totalBytes: uploadTotalBytes,
+                  speedBps,
+                });
+              },
             }
           );
 
@@ -326,6 +385,17 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
           }
         } catch {
           newFailed = [...newFailed, ...page];
+        } finally {
+          const loaded = Number(pageProgressRef.current.get(pageKey) || 0);
+          completedBytesRef.current = Math.min(uploadTotalBytes, completedBytesRef.current + Math.max(pageBytes, loaded));
+          pageProgressRef.current.delete(pageKey);
+          const activeLoaded = Array.from(pageProgressRef.current.values())
+            .reduce((sum, value) => sum + Number(value || 0), 0);
+          setUploadTelemetry(prev => ({
+            ...prev,
+            activeNames: [],
+            uploadedBytes: Math.min(uploadTotalBytes, completedBytesRef.current + activeLoaded),
+          }));
         }
 
         pagesDone++;
@@ -364,6 +434,12 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
     setFiles([]);
     setUploading(false);
     setDone(true);
+    setUploadTelemetry(prev => ({
+      ...prev,
+      activeNames: [],
+      uploadedBytes: Math.max(prev.uploadedBytes, accepted > 0 ? uploadTotalBytes : prev.uploadedBytes),
+      speedBps: 0,
+    }));
 
     if (accepted > 0) onUploadComplete?.({ accepted, batchId: trackedBatchId, batch_id: trackedBatchId });
   };
@@ -376,6 +452,7 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
     setDone(false); setUploadedCount(0);
     setProgress({ batchDone: 0, batchTotal: 0 });
     setUploadError(''); setBatchTrackingWarning(''); setActiveBatchId(null);
+    setUploadTelemetry(initialUploadTelemetry);
   };
 
   const pct = progress.batchTotal > 0
@@ -437,6 +514,43 @@ export default function PhotoUpload({ eventId, onUploadComplete }) {
           >{tab.icon}{tab.label}</button>
         ))}
       </div>
+
+      {uploadMode === 'local' && uploading && (
+        <div className="card" style={{ padding: '0.9rem 1rem', borderColor: 'rgba(6,182,212,0.28)', background: 'rgba(6,182,212,0.06)' }}>
+          <div style={{ alignItems: 'center', display: 'grid', gap: '0.75rem', gridTemplateColumns: 'minmax(0, 1.5fr) repeat(3, minmax(120px, 0.55fr))' }}>
+            <div style={{ minWidth: 0 }}>
+              <div className="text-xs text-muted" style={{ alignItems: 'center', display: 'flex', gap: '0.35rem', marginBottom: 2 }}>
+                <Activity size={13} /> Currently uploading
+              </div>
+              <div className="text-sm font-semibold truncate" title={uploadTelemetry.activeNames.join(', ') || 'Preparing upload'}>
+                {uploadTelemetry.activeNames.length ? uploadTelemetry.activeNames.join(', ') : 'Preparing upload'}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs text-muted">Speed</div>
+              <div className="text-sm font-semibold">{formatSpeed(uploadTelemetry.speedBps)}</div>
+            </div>
+            <div>
+              <div className="text-xs text-muted">Uploaded</div>
+              <div className="text-sm font-semibold">
+                {formatBytes(uploadTelemetry.uploadedBytes)} / {formatBytes(uploadTelemetry.totalBytes)}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs text-muted">Page</div>
+              <div className="text-sm font-semibold">{Math.min(progress.batchDone + 1, progress.batchTotal)} of {progress.batchTotal}</div>
+            </div>
+          </div>
+          <div className="progress-bar" style={{ height: 5, marginTop: '0.75rem' }}>
+            <div
+              className="progress-bar-fill"
+              style={{
+                width: `${uploadTelemetry.totalBytes > 0 ? Math.min(100, (uploadTelemetry.uploadedBytes / uploadTelemetry.totalBytes) * 100) : 0}%`,
+              }}
+            />
+          </div>
+        </div>
+      )}
 
       {uploadError && (
         <div style={{ alignItems: 'center', background: 'rgba(239,68,68,0.07)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 'var(--radius-md)', color: 'var(--error)', display: 'flex', fontSize: '0.82rem', gap: '0.5rem', padding: '0.75rem 1rem' }} role="alert">

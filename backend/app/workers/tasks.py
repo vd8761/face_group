@@ -259,6 +259,18 @@ def process_photo(
             pipeline_version = _pipeline_version()
             logger.info("Photo %s: %s faces detected on %s", photo_id, len(detected_faces), processor)
 
+            if item_uuid is not None:
+                current_item = (await db.execute(
+                    select(ProcessingBatchItem).where(ProcessingBatchItem.id == item_uuid)
+                )).scalar_one_or_none()
+                if current_item is None or current_item.status != BatchItemStatus.processing:
+                    logger.info(
+                        "Photo %s processing stopped because its batch item is no longer active",
+                        photo_id,
+                    )
+                    await db.rollback()
+                    return
+
             # Final regrouping and organizer corrections participate in this
             # same event lock, preventing snapshot/delete/assignment races.
             if not legacy_lock_held:
@@ -328,6 +340,16 @@ def process_photo(
             photo.status = PhotoStatus.done
             transition = None
             if item_uuid is not None:
+                current_item = (await db.execute(
+                    select(ProcessingBatchItem).where(ProcessingBatchItem.id == item_uuid)
+                )).scalar_one_or_none()
+                if current_item is None or current_item.status != BatchItemStatus.processing:
+                    logger.info(
+                        "Photo %s success write skipped because its batch item was cancelled",
+                        photo_id,
+                    )
+                    await db.rollback()
+                    return
                 transition = await mark_item_terminal(
                     db,
                     item_id=item_uuid,

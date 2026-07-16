@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import api, { getApiErrorMessage } from '../api/client';
 import PhotoUpload from '../components/PhotoUpload';
+import PhotoProcessingTable from '../components/PhotoProcessingTable';
 import ConfirmActionModal from '../components/ConfirmActionModal';
 import ProcessingOverview from '../components/processing/ProcessingOverview';
 import { isRunningBatch, useEventProcessing } from '../context/ProcessingContext';
@@ -308,6 +309,16 @@ export default function EventManager() {
 
         {/* Photos tab */}
         {activeTab === 'photos' && (
+          <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
+            <PhotoProcessingTable
+              eventId={eventId}
+              onChanged={loadAll}
+              onUploadNow={() => setActiveTab('upload')}
+            />
+          </motion.div>
+        )}
+
+        {activeTab === '__legacy_photos__' && (
           <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
             <div className="flex justify-between items-center mb-4">
               <span className="text-sm text-muted">
