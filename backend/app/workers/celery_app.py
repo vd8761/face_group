@@ -49,6 +49,10 @@ celery_app.conf.update(
     # Rate limit raised for Pro instance (was 30/m = glacially slow for 4K photos)
     task_annotations={
         "app.workers.tasks.process_photo": {"rate_limit": "120/m"},
+        # Google soft-bans the server IP ("Sorry..." page, HTTP 403) when
+        # hundreds of key-authenticated downloads arrive in a burst. Pace
+        # Drive imports so large folders trickle in instead of tripping it.
+        "app.workers.tasks.import_drive_item": {"rate_limit": "20/m"},
     },
     # Result expiry
     result_expires=3600,
