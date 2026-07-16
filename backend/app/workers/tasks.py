@@ -529,6 +529,10 @@ def import_drive_item(self, batch_item_id: str):
         mark_item_terminal,
     )
     from ..services.dispatcher import dispatch_item_ids
+    from ..services.drive_rate_limiter import (
+        DriveDownloadLimiterUnavailable,
+        wait_for_drive_download_slot,
+    )
     from ..services.storage import upload_original, upload_thumbnail
     from ..services.telemetry import record_completion_sync
 
@@ -607,6 +611,16 @@ def import_drive_item(self, batch_item_id: str):
                 f"?alt=media&key={settings.GOOGLE_DRIVE_API_KEY}"
             )
             async with httpx.AsyncClient(timeout=180) as client:
+                # This Redis-authoritative gate is the final authority across
+                # every organization and worker.  It intentionally sits next
+                # to the media request so metadata work and already-downloaded
+                # recovery paths do not consume a slot.
+                await wait_for_drive_download_slot(
+                    redis_url=settings.REDIS_URL,
+                    downloads_per_minute=getattr(
+                        settings, "DRIVE_DOWNLOADS_PER_MINUTE", 20
+                    ),
+                )
                 response = await client.get(
                     download_url,
                     headers={"User-Agent": "Mozilla/5.0 (compatible; PhotoGroup/2.0)"},
@@ -683,25 +697,45 @@ def import_drive_item(self, batch_item_id: str):
                     logger.warning("Drive face dispatch deferred: %s", dispatch_exc)
             return "downloaded"
 
+    async def _release_transient(error_message: str) -> bool:
+        async with AsyncSessionLocal() as db:
+            released = await mark_item_retrying(
+                db, item_id=item_uuid, error_message=error_message
+            )
+            row = await get_item_context(db, item_id=item_uuid)
+            if released and row is not None and row[2] is not None:
+                row[2].status = PhotoStatus.queued
+            await db.commit()
+            return released
+
     try:
         return run_async(_run())
     except ProcessingLeaseBusy as exc:
         raise self.retry(exc=exc, countdown=60, max_retries=20)
+    except DriveDownloadLimiterUnavailable as exc:
+        # Fail closed: without Redis there is no safe way to prove another
+        # worker did not just start a download.  Return the durable item to the
+        # dispatcher instead of consuming the task's finite error retry budget.
+        # The recovery loop will republish it when infrastructure is healthy.
+        try:
+            released = run_async(_release_transient(str(exc)))
+        except Exception as release_exc:
+            logger.warning(
+                "Could not release Drive item %s after limiter outage: %s",
+                item_uuid,
+                release_exc,
+            )
+            raise self.retry(exc=exc, countdown=60, max_retries=20)
+        logger.warning(
+            "Drive item %s deferred because global pacing is unavailable",
+            item_uuid,
+        )
+        return "rate-limiter-unavailable" if released else "not-claimable"
     except Exception as exc:
         exc_text = str(exc)
         if self.request.retries < self.max_retries:
-            async def _release():
-                async with AsyncSessionLocal() as db:
-                    released = await mark_item_retrying(
-                        db, item_id=item_uuid, error_message=exc_text
-                    )
-                    row = await get_item_context(db, item_id=item_uuid)
-                    if released and row is not None and row[2] is not None:
-                        row[2].status = PhotoStatus.queued
-                    await db.commit()
-
             try:
-                run_async(_release())
+                run_async(_release_transient(exc_text))
             except Exception:
                 pass
             raise self.retry(exc=exc, countdown=min(300, 30 * (2 ** self.request.retries)))

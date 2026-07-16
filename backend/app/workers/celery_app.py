@@ -36,9 +36,12 @@ celery_app.conf.update(
     enable_utc=True,
     task_track_started=True,
     task_acks_late=True,
-    # The local 4 GB GPU can safely hold one Buffalo-L worker at a time.
+    # The launcher supplies --autoscale on POSIX after resolving CPU/GPU/RAM
+    # capacity. Windows uses solo=1. Keeping these defaults at one is the safe
+    # fallback for ad-hoc worker commands that bypass the managed launcher.
     worker_prefetch_multiplier=1,
     worker_concurrency=1,
+    worker_autoscaler="app.workers.resource_autoscaler:ResourceAwareAutoscaler",
     # Large originals can need several tiled CPU passes. Keep a hard guard
     # without failing healthy 100 MB photos on slower workers.
     task_time_limit=900,
